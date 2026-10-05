@@ -52,5 +52,13 @@
                 <action android:name="android.intent.action.MAIN" />
             </intent-filter>
         </activity>
+
+        <receiver
+            android:name=".app.TestCmdReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="top.niunaijun.blackboxa.ACTION_TEST_CMD" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
