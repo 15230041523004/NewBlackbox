@@ -52,6 +52,26 @@ class TestCmdReceiver : BroadcastReceiver() {
                     val installed = if (pkg.isNotEmpty()) BlackBoxCore.get().isInstalled(pkg, userId) else false
                     Log.i(TAG, "RESULT_CMD: users=$users pkg=$pkg user=$userId installed=$installed")
                 }
+                "is_support_gms" -> {
+                    val supported = BlackBoxCore.get().isSupportGms
+                    Log.i(TAG, "RESULT_CMD: is_support_gms -> $supported")
+                }
+                "is_install_gms" -> {
+                    val installed = BlackBoxCore.get().isInstallGms(userId)
+                    Log.i(TAG, "RESULT_CMD: is_install_gms user=$userId -> $installed")
+                }
+                "install_gms" -> {
+                    val res = BlackBoxCore.get().installGms(userId)
+                    Log.i(TAG, "RESULT_CMD: install_gms user=$userId success=${res.success} msg=${res.msg}")
+                }
+                "uninstall_gms" -> {
+                    val res = BlackBoxCore.get().uninstallGms(userId)
+                    Log.i(TAG, "RESULT_CMD: uninstall_gms user=$userId -> $res")
+                }
+                "list_packages" -> {
+                    val pkgs = BlackBoxCore.get().getInstalledPackages(0, userId).map { it.packageName }
+                    Log.i(TAG, "RESULT_CMD: list_packages user=$userId pkgs=$pkgs")
+                }
                 else -> {
                     Log.w(TAG, "RESULT_CMD: Unknown cmd: $cmd")
                 }
