@@ -90,6 +90,7 @@ import top.niunaijun.blackbox.utils.compat.BuildCompat;
 import top.niunaijun.blackbox.fake.service.ISettingsProviderProxy;
 import top.niunaijun.blackbox.fake.service.FeatureFlagUtilsProxy;
 import top.niunaijun.blackbox.fake.service.WorkManagerProxy;
+import top.niunaijun.blackbox.fake.service.ILocaleManagerProxy;
 
 
 
@@ -176,6 +177,7 @@ public class HookManager {
             addInjector(new IWifiScannerProxy());
             addInjector(new ApkAssetsProxy());
             addInjector(new ResourcesManagerProxy());
+            addInjector(new ILocaleManagerProxy());
             
             if (BuildCompat.isS()) {
                 addInjector(new IActivityClientProxy(null));

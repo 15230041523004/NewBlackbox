@@ -412,6 +412,10 @@ public class IPackageManagerProxy extends BinderInvocationStub {
                 return PackageManager.PERMISSION_GRANTED;
             }
             
+            if (isStandardOrNormalPermission(permission)) {
+                Slog.d(TAG, "SimpleAudioPermissionHook: Granting standard permission: " + permission + " to " + packageName);
+                return PackageManager.PERMISSION_GRANTED;
+            }
             
             return method.invoke(who, args);
         }
@@ -424,24 +428,25 @@ public class IPackageManagerProxy extends BinderInvocationStub {
             String permission = (String) args[0];
             String packageName = (String) args[1];
             
-            
             if (isAudioPermission(permission)) {
                 Slog.d(TAG, "CheckSelfPermission: Granting audio permission: " + permission + " to " + packageName);
                 return PackageManager.PERMISSION_GRANTED;
             }
 
-            
             if (isStorageOrMediaPermission(permission)) {
                 Slog.d(TAG, "CheckSelfPermission: Granting storage/media permission: " + permission + " to " + packageName);
                 return PackageManager.PERMISSION_GRANTED;
             }
-            
             
             if (isNotificationOrXiaomiPermission(permission)) {
                 Slog.d(TAG, "CheckSelfPermission: Granting notification/Xiaomi permission: " + permission + " to " + packageName);
                 return PackageManager.PERMISSION_GRANTED;
             }
             
+            if (isStandardOrNormalPermission(permission)) {
+                Slog.d(TAG, "CheckSelfPermission: Granting standard permission: " + permission + " to " + packageName);
+                return PackageManager.PERMISSION_GRANTED;
+            }
             
             return method.invoke(who, args);
         }
@@ -533,6 +538,19 @@ public class IPackageManagerProxy extends BinderInvocationStub {
     }
 
     
+    private static boolean isStandardOrNormalPermission(String permission) {
+        if (permission == null) return false;
+        return permission.equals(android.Manifest.permission.INTERNET)
+                || permission.equals(android.Manifest.permission.ACCESS_NETWORK_STATE)
+                || permission.equals(android.Manifest.permission.ACCESS_WIFI_STATE)
+                || permission.equals(android.Manifest.permission.CHANGE_WIFI_STATE)
+                || permission.equals(android.Manifest.permission.WAKE_LOCK)
+                || permission.equals(android.Manifest.permission.VIBRATE)
+                || permission.equals("android.permission.DETECT_SCREEN_CAPTURE")
+                || permission.equals("android.permission.SCHEDULE_EXACT_ALARM")
+                || permission.equals("android.permission.USE_EXACT_ALARM");
+    }
+
     private static boolean isAudioPermission(String permission) {
         if (permission == null) return false;
         return permission.equals(android.Manifest.permission.RECORD_AUDIO)

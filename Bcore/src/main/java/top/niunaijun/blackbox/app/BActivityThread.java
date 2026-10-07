@@ -58,6 +58,8 @@ import black.android.content.BRContentProviderClient;
 import black.android.graphics.BRCompatibility;
 import black.android.security.net.config.BRNetworkSecurityConfigProvider;
 import black.com.android.internal.content.BRReferrerIntent;
+import top.niunaijun.blackbox.core.env.BEnvironment;
+import top.niunaijun.blackbox.utils.NativeUtils;
 import black.dalvik.system.BRVMRuntime;
 import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.app.configuration.AppLifecycleCallback;
@@ -370,13 +372,60 @@ public class BActivityThread extends IBActivityThread.Stub {
         }
         mProviders.addAll(Arrays.asList(packageInfo.providers));
 
+        // Ensure splitSourceDirs, className and appComponentFactory from host if missing
+        try {
+            ApplicationInfo hostAi = BlackBoxCore.getContext().getPackageManager().getApplicationInfo(packageName, 0);
+            if (hostAi != null) {
+                if (applicationInfo.splitSourceDirs == null && hostAi.splitSourceDirs != null) {
+                    applicationInfo.splitSourceDirs = hostAi.splitSourceDirs;
+                    applicationInfo.splitPublicSourceDirs = hostAi.splitPublicSourceDirs;
+                }
+                if (applicationInfo.className == null && hostAi.className != null) {
+                    applicationInfo.className = hostAi.className;
+                }
+                if (applicationInfo.appComponentFactory == null && hostAi.appComponentFactory != null) {
+                    applicationInfo.appComponentFactory = hostAi.appComponentFactory;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+
+        File appLibDir = BEnvironment.getAppLibDir(packageName);
+        applicationInfo.nativeLibraryDir = appLibDir.getAbsolutePath();
+
+        // Extract native libraries if missing or empty
+        File[] existingLibs = appLibDir.listFiles();
+        if (existingLibs == null || existingLibs.length == 0) {
+            try {
+                if (applicationInfo.sourceDir != null) {
+                    NativeUtils.copyNativeLib(new File(applicationInfo.sourceDir), appLibDir);
+                }
+                if (applicationInfo.splitSourceDirs != null) {
+                    for (String splitPath : applicationInfo.splitSourceDirs) {
+                        if (splitPath != null) {
+                            NativeUtils.copyNativeLib(new File(splitPath), appLibDir);
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                Slog.e(TAG, "Failed on-the-fly native lib extraction", t);
+            }
+        }
+
         Object boundApplication = BRActivityThread.get(BlackBoxCore.mainThread()).mBoundApplication();
 
         Context packageContext = createPackageContext(applicationInfo);
         Object loadedApk = BRContextImpl.get(packageContext).mPackageInfo();
         BRLoadedApk.get(loadedApk)._set_mSecurityViolation(false);
-        
         BRLoadedApk.get(loadedApk)._set_mApplicationInfo(applicationInfo);
+        BRLoadedApk.get(loadedApk)._set_mLibDir(appLibDir.getAbsolutePath());
+        if (applicationInfo.splitSourceDirs != null) {
+            try {
+                BRLoadedApk.get(loadedApk)._set_mSplitAppDirs(applicationInfo.splitSourceDirs);
+                BRLoadedApk.get(loadedApk)._set_mSplitResDirs(applicationInfo.splitPublicSourceDirs != null ? applicationInfo.splitPublicSourceDirs : applicationInfo.splitSourceDirs);
+            } catch (Throwable ignored) {
+            }
+        }
 
         int targetSdkVersion = applicationInfo.targetSdkVersion;
         if (targetSdkVersion < Build.VERSION_CODES.GINGERBREAD) {
@@ -423,46 +472,42 @@ public class BActivityThread extends IBActivityThread.Stub {
             Security.removeProvider("AndroidNSSP");
             BRNetworkSecurityConfigProvider.get().install(packageContext);
         }
-        Application application;
+        Application application = null;
         try {
             onBeforeCreateApplication(packageName, processName, packageContext);
-            
-            
+
             try {
-                application = BRLoadedApk.get(loadedApk).makeApplication(false, null);
-            } catch (Exception makeAppException) {
-                Slog.e(TAG, "Failed to makeApplication, trying fallback approach", makeAppException);
+                application = BRLoadedApk.getWithException(loadedApk).makeApplication(false, null);
+                Slog.d(TAG, "makeApplication(false, null) succeeded: " + application);
+            } catch (Throwable makeAppException) {
+                Slog.e(TAG, "Failed to makeApplication(false, null)", makeAppException);
                 application = null;
             }
-            
-            
+
             if (application == null) {
-                Slog.w(TAG, "makeApplication returned null, attempting fallback creation");
-                
-                
+                Slog.w(TAG, "makeApplication returned null, attempting fallback creation with LoadedApk classloader");
                 try {
-                    application = BRLoadedApk.get(loadedApk).makeApplication(true, null);
-                } catch (Exception e) {
-                    Slog.e(TAG, "Fallback makeApplication also failed", e);
-                }
-                
-                
-                if (application == null) {
-                    Slog.w(TAG, "Creating minimal application context as fallback");
-                    try {
-                        
-                        application = (Application) packageContext;
-                        if (application == null) {
-                            Slog.e(TAG, "Even package context is null, this is critical");
-                            throw new RuntimeException("Unable to create application context");
+                    ClassLoader cl = BRLoadedApk.get(loadedApk).getClassLoader();
+                    if (cl != null && applicationInfo.className != null) {
+                        Class<?> appClass = cl.loadClass(applicationInfo.className);
+                        application = (Application) appClass.newInstance();
+                        ensureApplicationBaseContext(application, applicationInfo);
+                        try {
+                            BRLoadedApk.get(loadedApk)._set_mApplication(application);
+                        } catch (Throwable ignored) {
                         }
-                    } catch (Exception contextException) {
-                        Slog.e(TAG, "Failed to create fallback application context", contextException);
-                        throw new RuntimeException("Unable to makeApplication - all fallback attempts failed", contextException);
+                        Slog.d(TAG, "LoadedApk classloader fallback succeeded: " + application);
                     }
+                } catch (Throwable fallbackErr) {
+                    Slog.e(TAG, "Fallback application creation with LoadedApk classloader failed", fallbackErr);
                 }
             }
-            
+
+            if (application == null) {
+                Slog.w(TAG, "Attempting createApplicationWithFallback");
+                application = createApplicationWithFallback(applicationInfo);
+            }
+
             if (application == null) {
                 Slog.e(TAG, "makeApplication application Error! All attempts failed");
                 throw new RuntimeException("Unable to create application - all creation methods failed");
@@ -650,14 +695,19 @@ public class BActivityThread extends IBActivityThread.Stub {
     
     private Application createApplication(android.content.pm.ApplicationInfo appInfo) {
         try {
-            
-            ClassLoader classLoader = getClassLoader(appInfo);
+            ClassLoader classLoader = null;
+            if (mBoundApplication != null && mBoundApplication.info != null) {
+                try {
+                    classLoader = BRLoadedApk.get(mBoundApplication.info).getClassLoader();
+                } catch (Throwable ignored) {
+                }
+            }
+            if (classLoader == null) {
+                classLoader = getClassLoader(appInfo);
+            }
             Class<?> appClass = classLoader.loadClass(appInfo.className);
             Application application = (Application) appClass.newInstance();
-            
-            
             ensureApplicationBaseContext(application, appInfo);
-            
             return application;
         } catch (Exception e) {
             Slog.e(TAG, "Error creating application: " + e.getMessage());
@@ -689,13 +739,26 @@ public class BActivityThread extends IBActivityThread.Stub {
             }
             
             
+            boolean attached = false;
             try {
-                Method attachBaseContext = Application.class.getDeclaredMethod("attachBaseContext", Context.class);
-                attachBaseContext.setAccessible(true);
-                attachBaseContext.invoke(application, packageContext);
-                Slog.d(TAG, "Successfully attached base context to application: " + appInfo.className);
-            } catch (Exception e) {
-                Slog.w(TAG, "Could not attach base context to application: " + e.getMessage());
+                Method attach = Application.class.getDeclaredMethod("attach", Context.class);
+                attach.setAccessible(true);
+                attach.invoke(application, packageContext);
+                attached = true;
+                Slog.d(TAG, "Successfully called attach on application: " + appInfo.className);
+            } catch (Throwable t) {
+                Slog.w(TAG, "Application.attach failed: " + t.getMessage());
+            }
+
+            if (!attached) {
+                try {
+                    Method attachBaseContext = ContextWrapper.class.getDeclaredMethod("attachBaseContext", Context.class);
+                    attachBaseContext.setAccessible(true);
+                    attachBaseContext.invoke(application, packageContext);
+                    Slog.d(TAG, "Successfully called attachBaseContext on application: " + appInfo.className);
+                } catch (Exception e) {
+                    Slog.w(TAG, "Could not attach base context to application: " + e.getMessage());
+                }
             }
             
         } catch (Exception e) {

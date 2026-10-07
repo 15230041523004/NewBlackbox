@@ -20,15 +20,26 @@ public class NativeUtils {
     public static final String TAG = "VirtualM";
 
     public static void copyNativeLib(File apk, File nativeLibDir) throws Exception {
+        if (apk == null || !apk.exists()) {
+            return;
+        }
         long startTime = System.currentTimeMillis();
         if (!nativeLibDir.exists()) {
             nativeLibDir.mkdirs();
         }
         try (ZipFile zipfile = new ZipFile(apk.getAbsolutePath())) {
+            if (Build.SUPPORTED_ABIS != null) {
+                for (String abi : Build.SUPPORTED_ABIS) {
+                    if (findAndCopyNativeLib(zipfile, abi, nativeLibDir)) {
+                        return;
+                    }
+                }
+            }
             if (findAndCopyNativeLib(zipfile, Build.CPU_ABI, nativeLibDir)) {
                 return;
             }
 
+            findAndCopyNativeLib(zipfile, "armeabi-v7a", nativeLibDir);
             findAndCopyNativeLib(zipfile, "armeabi", nativeLibDir);
         } finally {
             Log.d(TAG, "Done! +" + (System.currentTimeMillis() - startTime) + "ms");
@@ -81,7 +92,7 @@ public class NativeUtils {
 
         if (!findLib) {
             Log.d(TAG, "Fast skip all!");
-            return true;
+            return false;
         }
 
         return findSo;

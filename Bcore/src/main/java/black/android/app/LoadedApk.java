@@ -42,6 +42,12 @@ public interface LoadedApk {
     String mLibDir();
 
     @BField
+    String[] mSplitAppDirs();
+
+    @BField
+    String[] mSplitResDirs();
+
+    @BField
     boolean mSecurityViolation();
 
     @BField

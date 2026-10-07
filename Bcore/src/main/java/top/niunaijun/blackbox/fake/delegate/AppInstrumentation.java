@@ -118,8 +118,21 @@ public final class AppInstrumentation extends BaseInstrumentationDelegate implem
     @Override
     public Application newApplication(ClassLoader cl, String className, Context context) throws InstantiationException, IllegalAccessException, ClassNotFoundException {
         ContextCompat.fix(context);
+        Log.d(TAG, "newApplication called for class: " + className);
+        try {
+            Application app = super.newApplication(cl, className, context);
+            Log.d(TAG, "newApplication created successfully: " + app);
+            return app;
+        } catch (Throwable t) {
+            Log.e(TAG, "newApplication failed for class: " + className, t);
+            throw t;
+        }
+    }
 
-        return super.newApplication(cl, className, context);
+    @Override
+    public boolean onException(Object obj, Throwable e) {
+        Log.e(TAG, "onException in Instrumentation for obj: " + obj, e);
+        return mBaseInstrumentation.onException(obj, e);
     }
 
     @Override

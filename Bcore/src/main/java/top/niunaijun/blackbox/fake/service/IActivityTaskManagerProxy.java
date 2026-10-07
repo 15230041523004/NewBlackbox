@@ -51,4 +51,29 @@ public class IActivityTaskManagerProxy extends BinderInvocationStub {
             return method.invoke(who, args);
         }
     }
+
+    @ProxyMethod("registerScreenCaptureObserver")
+    public static class RegisterScreenCaptureObserver extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            try {
+                return method.invoke(who, args);
+            } catch (Throwable t) {
+                // Ignore SecurityException or permission errors on Android 14+
+                return null;
+            }
+        }
+    }
+
+    @ProxyMethod("unregisterScreenCaptureObserver")
+    public static class UnregisterScreenCaptureObserver extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            try {
+                return method.invoke(who, args);
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+    }
 }

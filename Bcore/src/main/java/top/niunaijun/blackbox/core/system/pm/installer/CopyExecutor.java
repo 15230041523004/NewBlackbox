@@ -16,8 +16,20 @@ public class CopyExecutor implements Executor {
     @Override
     public int exec(BPackageSettings ps, InstallOption option, int userId) {
         try {
-            if (!option.isFlag(InstallOption.FLAG_SYSTEM)) {
-                NativeUtils.copyNativeLib(new File(ps.pkg.baseCodePath), BEnvironment.getAppLibDir(ps.pkg.packageName));
+            File appLibDir = BEnvironment.getAppLibDir(ps.pkg.packageName);
+            if (ps.pkg.baseCodePath != null) {
+                NativeUtils.copyNativeLib(new File(ps.pkg.baseCodePath), appLibDir);
+            }
+            try {
+                android.content.pm.ApplicationInfo hostAi = top.niunaijun.blackbox.BlackBoxCore.getContext().getPackageManager().getApplicationInfo(ps.pkg.packageName, 0);
+                if (hostAi != null && hostAi.splitSourceDirs != null) {
+                    for (String splitPath : hostAi.splitSourceDirs) {
+                        if (splitPath != null) {
+                            NativeUtils.copyNativeLib(new File(splitPath), appLibDir);
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
             }
         } catch (Exception e) {
             e.printStackTrace();

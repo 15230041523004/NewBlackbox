@@ -101,7 +101,29 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
     }
 
     private Object getLaunchActivityItem(Object clientTransaction) {
-        List<Object> mActivityCallbacks = BRClientTransaction.get(clientTransaction).mActivityCallbacks();
+        List<Object> mActivityCallbacks = null;
+        try {
+            mActivityCallbacks = BRClientTransaction.get(clientTransaction).mActivityCallbacks();
+        } catch (Throwable ignored) {
+        }
+
+        if (mActivityCallbacks == null) {
+            // Android 15 (API 35) & Android 16 (API 36) compatibility:
+            // Google consolidated transaction callbacks into mTransactionItems
+            try {
+                java.lang.reflect.Field itemsField = clientTransaction.getClass().getDeclaredField("mTransactionItems");
+                itemsField.setAccessible(true);
+                mActivityCallbacks = (List<Object>) itemsField.get(clientTransaction);
+            } catch (Throwable t1) {
+                try {
+                    java.lang.reflect.Method getItemsMethod = clientTransaction.getClass().getDeclaredMethod("getTransactionItems");
+                    getItemsMethod.setAccessible(true);
+                    mActivityCallbacks = (List<Object>) getItemsMethod.invoke(clientTransaction);
+                } catch (Throwable t2) {
+                    Slog.w(TAG, "Failed to retrieve transaction items: " + t2.getMessage());
+                }
+            }
+        }
 
         if (mActivityCallbacks == null) {
             Slog.e(TAG, "mActivityCallbacks is null for clientTransaction: " + clientTransaction);
@@ -109,8 +131,13 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
         }
 
         for (Object obj : mActivityCallbacks) {
-            if (BRLaunchActivityItem.getRealClass().getName().equals(obj.getClass().getCanonicalName())) {
-                return obj;
+            if (obj != null) {
+                String className = obj.getClass().getCanonicalName();
+                String simpleName = obj.getClass().getSimpleName();
+                if ((BRLaunchActivityItem.getRealClass() != null && BRLaunchActivityItem.getRealClass().getName().equals(className))
+                        || "LaunchActivityItem".equals(simpleName)) {
+                    return obj;
+                }
             }
         }
         return null;
@@ -119,20 +146,36 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
     private boolean handleLaunchActivity(Object client) {
         Object r;
         if (BuildCompat.isPie()) {
-            
             r = getLaunchActivityItem(client);
         } else {
-            
             r = client;
         }
         if (r == null)
             return false;
 
         Intent intent;
-        IBinder token;
+        IBinder token = null;
         if (BuildCompat.isPie()) {
             intent = BRLaunchActivityItem.get(r).mIntent();
-            token = BRClientTransaction.get(client).mActivityToken();
+            try {
+                token = BRClientTransaction.get(client).mActivityToken();
+            } catch (Throwable ignored) {
+            }
+            if (token == null) {
+                // On Android 15/16, token is inside LaunchActivityItem
+                try {
+                    java.lang.reflect.Field tokenField = r.getClass().getDeclaredField("mActivityToken");
+                    tokenField.setAccessible(true);
+                    token = (IBinder) tokenField.get(r);
+                } catch (Throwable t) {
+                    try {
+                        java.lang.reflect.Method getTokenMethod = r.getClass().getDeclaredMethod("getActivityToken");
+                        getTokenMethod.setAccessible(true);
+                        token = (IBinder) getTokenMethod.invoke(r);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
         } else {
             ActivityThreadActivityClientRecordContext clientRecordContext = BRActivityThreadActivityClientRecord.get(r);
             intent = clientRecordContext.intent();
@@ -142,6 +185,7 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
         if (intent == null)
             return false;
 
+        intent.setExtrasClassLoader(this.getClass().getClassLoader());
         ProxyActivityRecord stubRecord = ProxyActivityRecord.create(intent);
         ActivityInfo activityInfo = stubRecord.mActivityInfo;
         if (activityInfo != null) {

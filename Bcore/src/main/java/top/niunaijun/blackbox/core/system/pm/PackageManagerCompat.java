@@ -298,13 +298,28 @@ public class PackageManagerCompat {
             ai.metaData = p.mAppMetaData;
         }
         ai.dataDir = BEnvironment.getDataDir(ai.packageName, userId).getAbsolutePath();
-        if (!p.installOption.isFlag(InstallOption.FLAG_SYSTEM)) {
-            ai.nativeLibraryDir = BEnvironment.getAppLibDir(ai.packageName).getAbsolutePath();
-        }
+        ai.nativeLibraryDir = BEnvironment.getAppLibDir(ai.packageName).getAbsolutePath();
         ai.processName = BPackageManagerService.fixProcessName(p.packageName, ai.packageName);
         ai.publicSourceDir = sourceDir;
         ai.sourceDir = sourceDir;
         ai.uid = p.mExtras.appId;
+
+        try {
+            ApplicationInfo hostAi = BlackBoxCore.getContext().getPackageManager().getApplicationInfo(p.packageName, 0);
+            if (hostAi != null) {
+                if (hostAi.splitSourceDirs != null && hostAi.splitSourceDirs.length > 0) {
+                    ai.splitSourceDirs = hostAi.splitSourceDirs;
+                    ai.splitPublicSourceDirs = hostAi.splitPublicSourceDirs;
+                }
+                if (ai.className == null && hostAi.className != null) {
+                    ai.className = hostAi.className;
+                }
+                if (ai.appComponentFactory == null && hostAi.appComponentFactory != null) {
+                    ai.appComponentFactory = hostAi.appComponentFactory;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
 
 
         if (BuildCompat.isL()) {
