@@ -51,19 +51,36 @@ public class SystemProviderStub extends ClassInvocationStub implements BContentP
         
         
         if ("call".equals(methodName)) {
-            
             if (args != null) {
                 Class<?> attributionSourceClass = BRAttributionSource.getRealClass();
                 for (int i = 0; i < args.length; i++) {
                     Object arg = args[i];
-                    
-                    if (arg != null && attributionSourceClass != null && 
-                            arg.getClass().getName().equals(attributionSourceClass.getName())) {
+                    if (arg != null && (arg.getClass().getName().contains("AttributionSource")
+                            || (attributionSourceClass != null && arg.getClass().getName().equals(attributionSourceClass.getName())))) {
                         ContextCompat.fixAttributionSourceState(arg, BlackBoxCore.getHostUid());
                     }
                 }
             }
-            return method.invoke(mBase, args);
+            Object result;
+            try {
+                result = method.invoke(mBase, args);
+            } catch (Throwable t) {
+                result = null;
+            }
+            if (args != null) {
+                for (Object arg : args) {
+                    if ("location_mode".equals(arg)) {
+                        android.os.Bundle b = (result instanceof android.os.Bundle) ? (android.os.Bundle) result : new android.os.Bundle();
+                        b.putString("value", "3");
+                        return b;
+                    } else if ("location_providers_allowed".equals(arg)) {
+                        android.os.Bundle b = (result instanceof android.os.Bundle) ? (android.os.Bundle) result : new android.os.Bundle();
+                        b.putString("value", "gps,network");
+                        return b;
+                    }
+                }
+            }
+            return result;
         }
         
         

@@ -14,6 +14,13 @@ import black.android.location.BRILocationManagerStub;
 import black.android.location.provider.BRProviderProperties;
 import black.android.location.provider.ProviderProperties;
 import black.android.os.BRServiceManager;
+import android.location.Location;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.os.SystemClock;
+import java.util.Collections;
+import java.util.List;
+import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.entity.location.BLocation;
 import top.niunaijun.blackbox.fake.frameworks.BLocationManager;
@@ -81,14 +88,12 @@ public class ILocationManagerProxy extends BinderInvocationStub {
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);
             try {
-                return method.invoke(who, args);
-            } catch (Exception e) {
-                if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied, returning null for getLastLocation: " + e.getCause().getMessage());
-                    return null;
-                }
-                throw e;
+                Object loc = method.invoke(who, args);
+                if (loc != null) return loc;
+            } catch (Throwable t) {
+                Log.d(TAG, "getLastLocation fallback: " + t.getMessage());
             }
+            return createSafeFallbackLocation();
         }
     }
 
@@ -102,14 +107,12 @@ public class ILocationManagerProxy extends BinderInvocationStub {
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);
             try {
-                return method.invoke(who, args);
-            } catch (Exception e) {
-                if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied, returning null for getLastKnownLocation: " + e.getCause().getMessage());
-                    return null;
-                }
-                throw e;
+                Object loc = method.invoke(who, args);
+                if (loc != null) return loc;
+            } catch (Throwable t) {
+                Log.d(TAG, "getLastKnownLocation fallback: " + t.getMessage());
             }
+            return createSafeFallbackLocation();
         }
     }
 
@@ -117,17 +120,18 @@ public class ILocationManagerProxy extends BinderInvocationStub {
     public static class GetCurrentLocation extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            if (BLocationManager.isFakeLocationEnable()) {
+                return BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName()).convert2SystemLocation();
+            }
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);
             try {
-                return method.invoke(who, args);
-            } catch (Exception e) {
-                if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied for getCurrentLocation: " + e.getCause().getMessage());
-                    return null;
-                }
-                throw e;
+                Object loc = method.invoke(who, args);
+                if (loc != null) return loc;
+            } catch (Throwable t) {
+                Log.d(TAG, "getCurrentLocation fallback: " + t.getMessage());
             }
+            return createSafeFallbackLocation();
         }
     }
 
@@ -137,14 +141,12 @@ public class ILocationManagerProxy extends BinderInvocationStub {
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);
+            scheduleFallbackLocationCallback(args);
             try {
                 return method.invoke(who, args);
-            } catch (Exception e) {
-                if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied for registerLocationListener: " + e.getCause().getMessage());
-                    return null;
-                }
-                throw e;
+            } catch (Throwable t) {
+                Log.d(TAG, "registerLocationListener suppressed: " + t.getMessage());
+                return null;
             }
         }
     }
@@ -162,24 +164,21 @@ public class ILocationManagerProxy extends BinderInvocationStub {
             }
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);
+            scheduleFallbackLocationCallback(args);
             try {
                 return method.invoke(who, args);
-            } catch (Exception e) {
-                if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied for requestLocationUpdates: " + e.getCause().getMessage());
-                    return 0;
-                }
-                throw e;
+            } catch (Throwable t) {
+                Log.d(TAG, "requestLocationUpdates suppressed: " + t.getMessage());
+                return 0;
             }
         }
     }
 
     @ProxyMethod("removeUpdates")
     public static class RemoveUpdates extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            if (args[0] instanceof IInterface) {
+            if (args != null && args.length > 0 && args[0] instanceof IInterface) {
                 IInterface listener = (IInterface) args[0];
                 BLocationManager.get().removeUpdates(listener.asBinder());
                 return 0;
@@ -190,67 +189,161 @@ public class ILocationManagerProxy extends BinderInvocationStub {
 
     @ProxyMethod("getProviderProperties")
     public static class GetProviderProperties extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            Object providerProperties = method.invoke(who, args);
-            if (BLocationManager.isFakeLocationEnable()) {
-                BRProviderProperties.get(providerProperties)._set_mHasNetworkRequirement(false);
-                if (BLocationManager.get().getCell(BActivityThread.getUserId(), BActivityThread.getAppPackageName()) == null) {
-                    BRProviderProperties.get(providerProperties)._set_mHasCellRequirement(false);
+            try {
+                Object providerProperties = method.invoke(who, args);
+                if (providerProperties != null && BLocationManager.isFakeLocationEnable()) {
+                    BRProviderProperties.get(providerProperties)._set_mHasNetworkRequirement(false);
+                    if (BLocationManager.get().getCell(BActivityThread.getUserId(), BActivityThread.getAppPackageName()) == null) {
+                        BRProviderProperties.get(providerProperties)._set_mHasCellRequirement(false);
+                    }
                 }
+                return providerProperties;
+            } catch (Throwable t) {
+                return null;
             }
-            return method.invoke(who, args);
         }
     }
 
     @ProxyMethod("removeGpsStatusListener")
     public static class RemoveGpsStatusListener extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            
             return 0;
         }
     }
 
     @ProxyMethod("getBestProvider")
     public static class GetBestProvider extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            if (BLocationManager.isFakeLocationEnable()) {
-                return LocationManager.GPS_PROVIDER;
-            }
-            return method.invoke(who, args);
+            return LocationManager.GPS_PROVIDER;
         }
     }
 
     @ProxyMethod("getAllProviders")
     public static class GetAllProviders extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return Arrays.asList(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER);
+            return Arrays.asList(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER, LocationManager.PASSIVE_PROVIDER);
         }
     }
 
     @ProxyMethod("isProviderEnabledForUser")
     public static class isProviderEnabledForUser extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String provider = (String) args[0];
-            return Objects.equals(provider, LocationManager.GPS_PROVIDER);
+            return true;
+        }
+    }
+
+    @ProxyMethod("isProviderEnabled")
+    public static class IsProviderEnabled extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return true;
+        }
+    }
+
+    @ProxyMethod("isLocationEnabledForUser")
+    public static class IsLocationEnabledForUser extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return true;
+        }
+    }
+
+    @ProxyMethod("isLocationEnabled")
+    public static class IsLocationEnabled extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return true;
         }
     }
 
     @ProxyMethod("setExtraLocationControllerPackageEnabled")
     public static class setExtraLocationControllerPackageEnabled extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             return 0;
+        }
+    }
+
+    public static Location createSafeFallbackLocation() {
+        if (BLocationManager.isFakeLocationEnable()) {
+            try {
+                BLocation loc = BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName());
+                if (loc != null && !loc.isEmpty()) {
+                    return loc.convert2SystemLocation();
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        Location location = new Location(LocationManager.GPS_PROVIDER);
+        location.setLatitude(55.751244);
+        location.setLongitude(37.618423);
+        location.setAltitude(150.0);
+        location.setSpeed(0.0f);
+        location.setBearing(0.0f);
+        location.setAccuracy(15.0f);
+        location.setTime(System.currentTimeMillis());
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            location.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+        }
+        Bundle extras = new Bundle();
+        extras.putInt("satellites", 12);
+        location.setExtras(extras);
+        return location;
+    }
+
+    private static void scheduleFallbackLocationCallback(final Object[] args) {
+        if (args == null) return;
+        for (final Object arg : args) {
+            if (arg != null && (arg instanceof IInterface || arg instanceof IBinder)) {
+                BlackBoxCore.get().getHandler().postDelayed(() -> {
+                    try {
+                        notifyListener(arg, createSafeFallbackLocation());
+                    } catch (Throwable ignored) {
+                    }
+                }, 150);
+            }
+        }
+    }
+
+    private static void notifyListener(Object listener, Location location) {
+        if (listener == null || location == null) return;
+        try {
+            if (listener instanceof IBinder) {
+                try {
+                    Class<?> stubClass = Class.forName("android.location.ILocationListener$Stub");
+                    Method asInterface = stubClass.getMethod("asInterface", IBinder.class);
+                    listener = asInterface.invoke(null, listener);
+                } catch (Throwable ignored) {
+                }
+            }
+            if (listener == null) return;
+            for (Method m : listener.getClass().getMethods()) {
+                if (m.getName().equals("onLocationChanged")) {
+                    Class<?>[] pTypes = m.getParameterTypes();
+                    if (pTypes.length == 1 && pTypes[0] == Location.class) {
+                        m.invoke(listener, location);
+                        return;
+                    } else if (pTypes.length == 2 && pTypes[0] == Location.class) {
+                        m.invoke(listener, location, null);
+                        return;
+                    } else if (pTypes.length >= 1 && List.class.isAssignableFrom(pTypes[0])) {
+                        if (pTypes.length == 1) {
+                            m.invoke(listener, Collections.singletonList(location));
+                        } else {
+                            m.invoke(listener, Collections.singletonList(location), null);
+                        }
+                        return;
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.d(TAG, "notifyListener error: " + t.getMessage());
         }
     }
 }
