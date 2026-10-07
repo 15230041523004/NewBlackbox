@@ -416,6 +416,18 @@ public class IPackageManagerProxy extends BinderInvocationStub {
                 Slog.d(TAG, "SimpleAudioPermissionHook: Granting standard permission: " + permission + " to " + packageName);
                 return PackageManager.PERMISSION_GRANTED;
             }
+
+            if (isLocationPermission(permission)) {
+                Slog.d(TAG, "SimpleAudioPermissionHook: Granting location permission: " + permission + " to " + packageName);
+                return PackageManager.PERMISSION_GRANTED;
+            }
+
+            if (args != null && args.length > 1 && args[1] instanceof String) {
+                String pkg = (String) args[1];
+                if (BlackBoxCore.get().isInstalled(pkg, BlackBoxCore.getUserId())) {
+                    args[1] = BlackBoxCore.getHostPkg();
+                }
+            }
             
             return method.invoke(who, args);
         }
@@ -446,6 +458,18 @@ public class IPackageManagerProxy extends BinderInvocationStub {
             if (isStandardOrNormalPermission(permission)) {
                 Slog.d(TAG, "CheckSelfPermission: Granting standard permission: " + permission + " to " + packageName);
                 return PackageManager.PERMISSION_GRANTED;
+            }
+
+            if (isLocationPermission(permission)) {
+                Slog.d(TAG, "CheckSelfPermission: Granting location permission: " + permission + " to " + packageName);
+                return PackageManager.PERMISSION_GRANTED;
+            }
+
+            if (args != null && args.length > 1 && args[1] instanceof String) {
+                String pkg = (String) args[1];
+                if (BlackBoxCore.get().isInstalled(pkg, BlackBoxCore.getUserId())) {
+                    args[1] = BlackBoxCore.getHostPkg();
+                }
             }
             
             return method.invoke(who, args);
@@ -549,6 +573,13 @@ public class IPackageManagerProxy extends BinderInvocationStub {
                 || permission.equals("android.permission.DETECT_SCREEN_CAPTURE")
                 || permission.equals("android.permission.SCHEDULE_EXACT_ALARM")
                 || permission.equals("android.permission.USE_EXACT_ALARM");
+    }
+
+    private static boolean isLocationPermission(String permission) {
+        if (permission == null) return false;
+        return permission.equals(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                || permission.equals(android.Manifest.permission.ACCESS_COARSE_LOCATION)
+                || permission.equals("android.permission.ACCESS_BACKGROUND_LOCATION");
     }
 
     private static boolean isAudioPermission(String permission) {

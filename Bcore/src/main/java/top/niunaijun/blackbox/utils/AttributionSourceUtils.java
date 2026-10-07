@@ -42,8 +42,14 @@ public class AttributionSourceUtils {
         try {
             if (attributionSource == null) return;
             
+            // 1. Modern Android (API 31+): Delegation to AttributionSourceState
+            try {
+                top.niunaijun.blackbox.utils.compat.ContextCompat.fixAttributionSourceState(attributionSource, BlackBoxCore.getHostUid());
+            } catch (Throwable t) {
+                // ignore
+            }
+
             Class<?> attributionSourceClass = attributionSource.getClass();
-            
             
             String[] uidFieldNames = {"mUid", "uid", "mCallingUid", "callingUid", "mSourceUid", "sourceUid"};
             
@@ -54,21 +60,17 @@ public class AttributionSourceUtils {
                     uidField.set(attributionSource, BlackBoxCore.getHostUid());
                     Slog.d(TAG, "Fixed AttributionSource UID via field: " + fieldName);
                     break;
-                } catch (NoSuchFieldException e) {
-                    
+                } catch (Throwable ignored) {
                 }
             }
-            
             
             try {
                 java.lang.reflect.Method setUidMethod = attributionSourceClass.getDeclaredMethod("setUid", int.class);
                 setUidMethod.setAccessible(true);
                 setUidMethod.invoke(attributionSource, BlackBoxCore.getHostUid());
                 Slog.d(TAG, "Fixed AttributionSource UID via setter method");
-            } catch (Exception e) {
-                
+            } catch (Throwable ignored) {
             }
-            
             
             String[] packageFieldNames = {"mPackageName", "packageName", "mSourcePackage", "sourcePackage"};
             
@@ -79,12 +81,11 @@ public class AttributionSourceUtils {
                     packageField.set(attributionSource, BlackBoxCore.getHostPkg());
                     Slog.d(TAG, "Fixed AttributionSource package name via field: " + fieldName);
                     break;
-                } catch (NoSuchFieldException e) {
-                    
+                } catch (Throwable ignored) {
                 }
             }
             
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Slog.w(TAG, "Error fixing AttributionSource UID: " + e.getMessage());
         }
     }

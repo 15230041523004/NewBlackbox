@@ -47,13 +47,11 @@ public class ILocationManagerProxy extends BinderInvocationStub {
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-
         MethodParameterUtils.replaceFirstAppPkg(args);
-        
+        top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
         
         String packageName = BActivityThread.getAppPackageName();
         if (packageName != null && packageName.equals("com.google.android.gms")) {
-            
             if (method.getName().equals("getLastLocation") || 
                 method.getName().equals("getLastKnownLocation") ||
                 method.getName().equals("requestLocationUpdates")) {
@@ -67,29 +65,26 @@ public class ILocationManagerProxy extends BinderInvocationStub {
 
     @ProxyMethod("registerGnssStatusCallback")
     public static class RegisterGnssStatusCallback extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            
             return true;
         }
     }
 
     @ProxyMethod("getLastLocation")
     public static class GetLastLocation extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             if (BLocationManager.isFakeLocationEnable()) {
                 return BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName()).convert2SystemLocation();
             }
-            
-            
+            top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+            MethodParameterUtils.replaceFirstAppPkg(args);
             try {
                 return method.invoke(who, args);
             } catch (Exception e) {
                 if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied, returning null for getLastLocation");
+                    Log.w(TAG, "Location permission denied, returning null for getLastLocation: " + e.getCause().getMessage());
                     return null;
                 }
                 throw e;
@@ -99,19 +94,54 @@ public class ILocationManagerProxy extends BinderInvocationStub {
 
     @ProxyMethod("getLastKnownLocation")
     public static class GetLastKnownLocation extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             if (BLocationManager.isFakeLocationEnable()) {
                 return BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName()).convert2SystemLocation();
             }
-            
-            
+            top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+            MethodParameterUtils.replaceFirstAppPkg(args);
             try {
                 return method.invoke(who, args);
             } catch (Exception e) {
                 if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied, returning null for getLastKnownLocation");
+                    Log.w(TAG, "Location permission denied, returning null for getLastKnownLocation: " + e.getCause().getMessage());
+                    return null;
+                }
+                throw e;
+            }
+        }
+    }
+
+    @ProxyMethod("getCurrentLocation")
+    public static class GetCurrentLocation extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+            MethodParameterUtils.replaceFirstAppPkg(args);
+            try {
+                return method.invoke(who, args);
+            } catch (Exception e) {
+                if (e.getCause() instanceof SecurityException) {
+                    Log.w(TAG, "Location permission denied for getCurrentLocation: " + e.getCause().getMessage());
+                    return null;
+                }
+                throw e;
+            }
+        }
+    }
+
+    @ProxyMethod("registerLocationListener")
+    public static class RegisterLocationListener extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+            MethodParameterUtils.replaceFirstAppPkg(args);
+            try {
+                return method.invoke(who, args);
+            } catch (Exception e) {
+                if (e.getCause() instanceof SecurityException) {
+                    Log.w(TAG, "Location permission denied for registerLocationListener: " + e.getCause().getMessage());
                     return null;
                 }
                 throw e;
@@ -121,7 +151,6 @@ public class ILocationManagerProxy extends BinderInvocationStub {
 
     @ProxyMethod("requestLocationUpdates")
     public static class RequestLocationUpdates extends MethodHook {
-
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             if (BLocationManager.isFakeLocationEnable()) {
@@ -131,13 +160,13 @@ public class ILocationManagerProxy extends BinderInvocationStub {
                     return 0;
                 }
             }
-            
-            
+            top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+            MethodParameterUtils.replaceFirstAppPkg(args);
             try {
                 return method.invoke(who, args);
             } catch (Exception e) {
                 if (e.getCause() instanceof SecurityException) {
-                    Log.w(TAG, "Location permission denied for requestLocationUpdates, returning 0");
+                    Log.w(TAG, "Location permission denied for requestLocationUpdates: " + e.getCause().getMessage());
                     return 0;
                 }
                 throw e;
