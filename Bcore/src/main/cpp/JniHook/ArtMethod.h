@@ -38,6 +38,8 @@ static constexpr uint32_t kAccCorePlatformApi =       0x20000000;
 static constexpr uint32_t kAccFastNative =            0x00080000;  
 static constexpr uint32_t kAccCriticalNative =        0x00100000;  
 
-static constexpr uint32_t kAccNterpInvokeFastPathFlag     = 0x00200000;  
+static constexpr uint32_t kAccNterpInvokeFastPathFlag     = 0x00200000;
+// Runtime bit. Stops the JIT from compiling the method and replacing its entry.
+static constexpr uint32_t kAccCompileDontBother = 0x02000000;
 
 #endif 

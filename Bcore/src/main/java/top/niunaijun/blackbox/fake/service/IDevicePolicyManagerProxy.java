@@ -77,4 +77,17 @@ public class IDevicePolicyManagerProxy extends BinderInvocationStub {
             return true;
         }
     }
+
+    /**
+     * CameraX asks this before a video circle. The system service rejects the
+     * guest package because the process uid belongs to the host, and that
+     * SecurityException cancels the camera graph.
+     */
+    @ProxyMethod("getCameraDisabled")
+    public static class GetCameraDisabled extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return Boolean.FALSE;
+        }
+    }
 }

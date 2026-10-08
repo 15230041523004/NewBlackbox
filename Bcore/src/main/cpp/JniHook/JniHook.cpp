@@ -3,6 +3,14 @@
 
 
 #include <jni.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+#include <sys/uio.h>
+#include <unistd.h>
 #include "JniHook.h"
 #include "Log.h"
 #include "ArtMethod.h"
@@ -15,6 +23,7 @@ static struct {
     unsigned int art_method_size;
     int art_method_flags_offset;
     int art_method_native_offset;
+    int art_method_entry_offset;
 
     int class_flags_offset;
 
@@ -206,6 +215,272 @@ __attribute__((section (".mytext")))  JNICALL void set_field_accessible
     ClearAccessFlag(artField, kAccFinal);
 }
 
+static void *ArtMethodPointer(JNIEnv *env, jobject reflectedMethod) {
+    if (reflectedMethod == nullptr) return nullptr;
+    if (HookEnv.api_level >= 26) {
+        jclass executable = env->FindClass("java/lang/reflect/Executable");
+        if (executable == nullptr) {
+            env->ExceptionClear();
+            return nullptr;
+        }
+        jfieldID artId = env->GetFieldID(executable, "artMethod", "J");
+        if (artId == nullptr) {
+            env->ExceptionClear();
+            return nullptr;
+        }
+        return reinterpret_cast<void *>(static_cast<uintptr_t>(
+                env->GetLongField(reflectedMethod, artId)));
+    }
+    return env->FromReflectedMethod(reflectedMethod);
+}
+
+static pthread_mutex_t g_art_write_lock = PTHREAD_MUTEX_INITIALIZER;
+static const char *g_art_write_how = nullptr;
+
+static void NoteArtWrite(const char *how) {
+    if (g_art_write_how == how) return;
+    g_art_write_how = how;
+    __android_log_print(ANDROID_LOG_INFO, "NativeCore", "copyArtMethod via %s", how);
+}
+
+static void ArtPageSpan(void *addr, size_t len, uintptr_t *start_out, size_t *span_out) {
+    long page = sysconf(_SC_PAGESIZE);
+    if (page <= 0) page = 4096;
+    uintptr_t start = reinterpret_cast<uintptr_t>(addr) & ~static_cast<uintptr_t>(page - 1);
+    uintptr_t end = (reinterpret_cast<uintptr_t>(addr) + len + static_cast<uintptr_t>(page) - 1)
+                    & ~static_cast<uintptr_t>(page - 1);
+    *start_out = start;
+    *span_out = end - start;
+}
+
+static bool MakeArtWritable(void *addr, size_t len) {
+    uintptr_t start = 0;
+    size_t span = 0;
+    ArtPageSpan(addr, len, &start, &span);
+    if (mprotect(reinterpret_cast<void *>(start), span, PROT_READ | PROT_WRITE) == 0) return true;
+    return mprotect(reinterpret_cast<void *>(start), span,
+                    PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
+}
+
+// Boot-image ArtMethods are mapped from a read-only fd, so mprotect cannot add
+// write permission. Replace those pages with a private writable copy.
+static bool RemapArtWritable(void *addr, size_t len) {
+    uintptr_t start = 0;
+    size_t span = 0;
+    ArtPageSpan(addr, len, &start, &span);
+    void *backup = mmap(nullptr, span, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (backup == MAP_FAILED) {
+        ALOGE("copyArtMethod: backup mmap errno=%d", errno);
+        return false;
+    }
+    memcpy(backup, reinterpret_cast<void *>(start), span);
+    int prots[2] = {PROT_READ | PROT_WRITE, PROT_READ | PROT_WRITE | PROT_EXEC};
+    void *mapped = MAP_FAILED;
+    int saved = 0;
+    for (int prot : prots) {
+        mapped = mmap(reinterpret_cast<void *>(start), span, prot,
+                      MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+        if (mapped != MAP_FAILED) break;
+        saved = errno;
+    }
+    if (mapped == MAP_FAILED) {
+        ALOGE("copyArtMethod: remap errno=%d", saved);
+        munmap(backup, span);
+        return false;
+    }
+    memcpy(mapped, backup, span);
+    munmap(backup, span);
+    return true;
+}
+
+static bool CommitArtBytes(void *addr, const void *data, size_t len, const char *how) {
+    memcpy(addr, data, len);
+    if (memcmp(addr, data, len) != 0) return false;
+    __builtin___clear_cache(reinterpret_cast<char *>(addr),
+                            reinterpret_cast<char *>(addr) + len);
+    NoteArtWrite(how);
+    return true;
+}
+
+static bool WriteArtBytes(void *addr, const void *data, size_t len) {
+    pthread_mutex_lock(&g_art_write_lock);
+    bool wrote = false;
+    // process_vm_writev keeps the boot-image mapping. Remap replaces that page
+    // with anonymous memory, and the GC then treats ArtMethod words as objects.
+    if (MakeArtWritable(addr, len) && CommitArtBytes(addr, data, len, "mprotect")) {
+        wrote = true;
+    }
+#if defined(__NR_process_vm_writev)
+    if (!wrote) {
+        struct iovec local{};
+        struct iovec remote{};
+        local.iov_base = const_cast<void *>(data);
+        local.iov_len = len;
+        remote.iov_base = addr;
+        remote.iov_len = len;
+        if (syscall(__NR_process_vm_writev, getpid(), &local, 1, &remote, 1, 0) == static_cast<ssize_t>(len)
+            && memcmp(addr, data, len) == 0) {
+            __builtin___clear_cache(reinterpret_cast<char *>(addr),
+                                    reinterpret_cast<char *>(addr) + len);
+            NoteArtWrite("process_vm_writev");
+            wrote = true;
+        }
+    }
+#endif
+    if (!wrote) {
+        int fd = open("/proc/self/mem", O_RDWR | O_CLOEXEC);
+        if (fd >= 0) {
+            ssize_t n = pwrite(fd, data, len, static_cast<off_t>(reinterpret_cast<uintptr_t>(addr)));
+            close(fd);
+            if (n == static_cast<ssize_t>(len) && memcmp(addr, data, len) == 0) {
+                __builtin___clear_cache(reinterpret_cast<char *>(addr),
+                                        reinterpret_cast<char *>(addr) + len);
+                NoteArtWrite("proc_mem");
+                wrote = true;
+            }
+        }
+    }
+    if (!wrote && RemapArtWritable(addr, len) && CommitArtBytes(addr, data, len, "remap")) {
+        wrote = true;
+    }
+    if (!wrote) ALOGE("copyArtMethod: write failed errno=%d", errno);
+    pthread_mutex_unlock(&g_art_write_lock);
+    return wrote;
+}
+
+static void *g_stub_page = nullptr;
+static size_t g_stub_used = 0;
+static bool g_stub_rwx = false;
+static const size_t kStubPage = 4096;
+
+static void *AllocStub(size_t bytes) {
+    if (g_stub_page == nullptr || g_stub_used + bytes > kStubPage) {
+        void *page = mmap(nullptr, kStubPage, PROT_READ | PROT_WRITE | PROT_EXEC,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        g_stub_rwx = page != MAP_FAILED;
+        if (!g_stub_rwx) {
+            page = mmap(nullptr, kStubPage, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (page == MAP_FAILED) return nullptr;
+        }
+        g_stub_page = page;
+        g_stub_used = 0;
+    }
+    if (!g_stub_rwx && mprotect(g_stub_page, kStubPage, PROT_READ | PROT_WRITE) != 0) {
+        return nullptr;
+    }
+    void *stub = reinterpret_cast<char *>(g_stub_page) + g_stub_used;
+    g_stub_used += bytes;
+    return stub;
+}
+
+static bool SealStub(void *stub, size_t bytes) {
+    __builtin___clear_cache(reinterpret_cast<char *>(stub),
+                            reinterpret_cast<char *>(stub) + bytes);
+    if (g_stub_rwx) return true;
+    return mprotect(g_stub_page, kStubPage, PROT_READ | PROT_EXEC) == 0;
+}
+
+// Jump to the replacement method with its own ArtMethod in the method register.
+// The target keeps its declaring class, which the GC scans. A full copy of an
+// app method onto a boot-image method makes that scan mark a garbage word.
+static void *BuildTrampoline(void *art_method, void *entry) {
+#if defined(__aarch64__)
+    struct Stub {
+        uint32_t code[4];
+        void *method;
+        void *entry;
+    };
+    static_assert(sizeof(Stub) == 32, "arm64 stub");
+    Stub *stub = reinterpret_cast<Stub *>(AllocStub(sizeof(Stub)));
+    if (stub == nullptr) return nullptr;
+    stub->code[0] = 0x58000080;  // ldr x0, #16
+    stub->code[1] = 0x580000B0;  // ldr x16, #20
+    stub->code[2] = 0xD61F0200;  // br x16
+    stub->code[3] = 0xD503201F;  // nop
+    stub->method = art_method;
+    stub->entry = entry;
+    if (!SealStub(stub, sizeof(Stub))) return nullptr;
+    return stub;
+#elif defined(__arm__)
+    struct Stub {
+        uint32_t code[2];
+        void *method;
+        void *entry;
+    };
+    Stub *stub = reinterpret_cast<Stub *>(AllocStub(sizeof(Stub)));
+    if (stub == nullptr) return nullptr;
+    stub->code[0] = 0xE59F0000;  // ldr r0, [pc, #0]
+    stub->code[1] = 0xE59FF000;  // ldr pc, [pc, #0]
+    stub->method = art_method;
+    stub->entry = entry;
+    if (!SealStub(stub, sizeof(Stub))) return nullptr;
+    return stub;
+#else
+    (void) art_method;
+    (void) entry;
+    return nullptr;
+#endif
+}
+
+static jboolean RedirectArtMethod(JNIEnv *env, jclass, jobject src, jobject dst) {
+    if (HookEnv.art_method_entry_offset <= 0) return JNI_FALSE;
+    if (static_cast<unsigned int>(HookEnv.art_method_entry_offset) + sizeof(void *)
+        > HookEnv.art_method_size) {
+        return JNI_FALSE;
+    }
+    void *from = ArtMethodPointer(env, src);
+    void *to = ArtMethodPointer(env, dst);
+    if (from == nullptr || to == nullptr || from == to) return JNI_FALSE;
+    void *entry = nullptr;
+    memcpy(&entry, reinterpret_cast<char *>(from) + HookEnv.art_method_entry_offset, sizeof(entry));
+    if (entry == nullptr) return JNI_FALSE;
+    void *stub = BuildTrampoline(from, entry);
+    if (stub == nullptr) {
+        ALOGE("redirectArtMethod: trampoline failed");
+        return JNI_FALSE;
+    }
+    char *target = reinterpret_cast<char *>(to);
+    if (!WriteArtBytes(target + HookEnv.art_method_entry_offset, &stub, sizeof(stub))) {
+        return JNI_FALSE;
+    }
+    if (HookEnv.art_method_flags_offset > 0) {
+        uint32_t flags = 0;
+        memcpy(&flags, target + HookEnv.art_method_flags_offset, sizeof(flags));
+        flags |= kAccCompileDontBother;
+        flags &= ~kAccNterpInvokeFastPathFlag;
+        WriteArtBytes(target + HookEnv.art_method_flags_offset, &flags, sizeof(flags));
+    }
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        __android_log_print(ANDROID_LOG_INFO, "NativeCore", "ArtMethod redirect via trampoline");
+    }
+    return JNI_TRUE;
+}
+
+static jboolean CopyArtMethod(JNIEnv *env, jclass, jobject src, jobject dst) {
+    if (HookEnv.art_method_size < 16 || HookEnv.art_method_size > 128) return JNI_FALSE;
+    void *from = ArtMethodPointer(env, src);
+    void *to = ArtMethodPointer(env, dst);
+    if (from == nullptr || to == nullptr || from == to) return JNI_FALSE;
+    // Full copy, used to save the original into the backup method.
+    char buf[128];
+    memcpy(buf, from, HookEnv.art_method_size);
+    if (HookEnv.art_method_flags_offset > 0) {
+        // Reflection invokes a public instance method through the receiver's
+        // vtable. The saved copy has the original slot, now containing the hook,
+        // so that dispatch recurses. A private copy is invoked directly.
+        uint32_t flags = 0;
+        memcpy(&flags, buf + HookEnv.art_method_flags_offset, sizeof(flags));
+        flags &= ~(kAccPublic | kAccProtected | kAccNterpInvokeFastPathFlag);
+        flags |= kAccPrivate | kAccCompileDontBother;
+        memcpy(buf + HookEnv.art_method_flags_offset, &flags, sizeof(flags));
+    }
+    return WriteArtBytes(to, buf, HookEnv.art_method_size) ? JNI_TRUE : JNI_FALSE;
+}
+
 void registerNative(JNIEnv *env) {
     jclass clazz = env->FindClass("top/niunaijun/jnihook/jni/JniHook");
     JNINativeMethod gMethods[] = {
@@ -213,6 +488,8 @@ void registerNative(JNIEnv *env) {
             {"nativeOffset2", "()V",                                            (void *) native_offset2},
             {"setAccessible", "(Ljava/lang/Class;Ljava/lang/reflect/Method;)V", (void *) set_method_accessible},
             {"setAccessible", "(Ljava/lang/Class;Ljava/lang/reflect/Field;)V",  (void *) set_field_accessible},
+            {"copyArtMethod", "(Ljava/lang/reflect/Method;Ljava/lang/reflect/Method;)Z", (void *) CopyArtMethod},
+            {"redirectArtMethod", "(Ljava/lang/reflect/Method;Ljava/lang/reflect/Method;)Z", (void *) RedirectArtMethod},
     };
     if (env->RegisterNatives(clazz, gMethods, sizeof(gMethods) / sizeof(gMethods[0])) < 0) {
         ALOGE("jni register error.");
@@ -253,6 +530,8 @@ void JniHook::InitJniHook(JNIEnv *env, int api_level) {
         ALOGE("init jni hook error. art_method_native_offset not found!");
         return;
     }
+    HookEnv.art_method_entry_offset =
+            (HookEnv.art_method_native_offset + 1) * static_cast<int>(sizeof(void *));
 
     uint32_t flags = 0x0;
     flags = flags | kAccPublic;

@@ -460,6 +460,11 @@ public class BActivityThread extends IBActivityThread.Stub {
         }
 
         NativeCore.init(Build.VERSION.SDK_INT);
+        try {
+            top.niunaijun.blackbox.fake.service.SpoofHookInstaller.install();
+        } catch (Throwable spoofHookError) {
+            Slog.w(TAG, "Spoof hooks were not installed: " + spoofHookError.getMessage());
+        }
         assert packageContext != null;
         IOCore.get().enableRedirect(packageContext);
 

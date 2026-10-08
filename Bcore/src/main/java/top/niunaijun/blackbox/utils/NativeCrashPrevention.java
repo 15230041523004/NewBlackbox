@@ -23,6 +23,7 @@ import top.niunaijun.blackbox.fake.service.ClassLoaderProxy;
 public class NativeCrashPrevention {
     private static final String TAG = "NativeCrashPrevention";
     private static boolean sIsInitialized = false;
+    private static final ThreadLocal<Boolean> sInHandler = new ThreadLocal<>();
     
     
     private static final Map<String, PreventionResult> sPreventionCache = new HashMap<>();
@@ -96,7 +97,13 @@ public class NativeCrashPrevention {
             Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
                 @Override
                 public void uncaughtException(Thread thread, Throwable throwable) {
-                    handleNativeCrash(thread, throwable);
+                    if (Boolean.TRUE.equals(sInHandler.get())) return;
+                    sInHandler.set(Boolean.TRUE);
+                    try {
+                        handleNativeCrash(thread, throwable);
+                    } finally {
+                        sInHandler.set(Boolean.FALSE);
+                    }
                 }
             });
             

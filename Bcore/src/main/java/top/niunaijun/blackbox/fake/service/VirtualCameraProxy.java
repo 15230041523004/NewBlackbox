@@ -254,7 +254,14 @@ public class VirtualCameraProxy extends ClassInvocationStub {
     /** Reads bytes from the virtual camera resource directory for the current package. */
     static byte[] loadVirtualFrame(String fileName) {
         try {
-            String pkg = BlackBoxCore.get().getHostPkg();
+            String pkg = VirtualResourceManager.currentPackage();
+
+            top.niunaijun.blackbox.utils.AppSpoofConfig cfg = VirtualResourceManager.getSpoofConfig(pkg);
+            if (cfg.grantCamera) {
+                Slog.d(TAG, "Camera spoofing disabled (grant=true) for " + pkg);
+                return null;
+            }
+
             File f = VirtualResourceManager.getCameraFile(pkg, fileName);
             if (f == null || !f.exists()) return null;
             FileInputStream fis = new FileInputStream(f);

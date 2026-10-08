@@ -43,9 +43,27 @@ public class INotificationManagerProxy extends BinderInvocationStub {
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-
         MethodParameterUtils.replaceAllAppPkg(args);
-        return super.invoke(proxy, method, args);
+        top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+        try {
+            return super.invoke(proxy, method, args);
+        } catch (Throwable t) {
+            Throwable cause = t;
+            if (cause instanceof java.lang.reflect.InvocationTargetException && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            if (cause instanceof SecurityException) {
+                top.niunaijun.blackbox.utils.Slog.w(TAG, "Suppressed SecurityException in " + method.getName() + ": " + cause.getMessage());
+                Class<?> returnType = method.getReturnType();
+                if (returnType == boolean.class || returnType == Boolean.class) {
+                    return true;
+                } else if (returnType == int.class || returnType == Integer.class) {
+                    return 0;
+                }
+                return null;
+            }
+            throw t;
+        }
     }
 
     @Override
@@ -175,6 +193,20 @@ public class INotificationManagerProxy extends BinderInvocationStub {
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             List<NotificationChannelGroup> notificationChannelGroups = BNotificationManager.get().getNotificationChannelGroups(BActivityThread.getAppPackageName());
             return ParceledListSliceCompat.create(notificationChannelGroups);
+        }
+    }
+
+    @ProxyMethod("canUseFullScreenIntent")
+    public static class CanUseFullScreenIntent extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            try {
+                top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+                return method.invoke(who, args);
+            } catch (Throwable t) {
+                top.niunaijun.blackbox.utils.Slog.w(TAG, "canUseFullScreenIntent fallback to true: " + t.getMessage());
+                return true;
+            }
         }
     }
 }

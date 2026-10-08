@@ -65,8 +65,9 @@ public class IOCore {
             return path;
         }
         String search = sBlackTree.search(path);
-        if (!TextUtils.isEmpty(search))
-            return search;
+        if (!TextUtils.isEmpty(search) && (path.length() == search.length()
+                || path.charAt(search.length()) == '/'))
+            return path;
 
         
         String key = mTrieTree.search(path);

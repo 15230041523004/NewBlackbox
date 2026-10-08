@@ -50,6 +50,10 @@ public class VirtualSensorEmitter implements Runnable {
         handler.removeCallbacks(this);
     }
 
+    public boolean matches(Sensor other) {
+        return other == null || (sensor != null && other.getType() == sensor.getType());
+    }
+
     @Override
     public void run() {
         if (!running) return;

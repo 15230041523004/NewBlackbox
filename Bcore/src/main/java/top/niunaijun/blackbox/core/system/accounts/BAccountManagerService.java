@@ -707,7 +707,7 @@ public class BAccountManagerService extends IBAccountManagerService.Stub impleme
 
     @Override
     public void addAccountAsUser(IAccountManagerResponse response, String accountType, String authTokenType, String[] requiredFeatures, boolean expectActivityLaunch, Bundle options, int userId) throws RemoteException {
-        
+        addAccount(response, accountType, authTokenType, requiredFeatures, expectActivityLaunch, options, userId);
     }
 
     @Override
@@ -1838,7 +1838,17 @@ public class BAccountManagerService extends IBAccountManagerService.Stub impleme
 
 
 
-            if (!mContext.bindService(intent, this, flags)) {
+            Intent proxyIntent = null;
+            try {
+                proxyIntent = top.niunaijun.blackbox.core.system.am.BActivityManagerService.get().bindService(intent, null, null, mAccounts.userId);
+            } catch (Throwable t) {
+                Log.w(TAG, "Failed to resolve proxyIntent via BActivityManagerService: " + t.getMessage());
+            }
+            if (proxyIntent == null) {
+                proxyIntent = intent;
+            }
+
+            if (!mContext.bindService(proxyIntent, this, flags)) {
                 if (Log.isLoggable(TAG, Log.VERBOSE)) {
                     Log.v(TAG, "bindService to " + componentName + " failed");
                 }

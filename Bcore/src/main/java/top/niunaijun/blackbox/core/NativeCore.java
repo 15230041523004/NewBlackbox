@@ -31,6 +31,12 @@ public class NativeCore {
 
     public static native void enableIO();
 
+    /** Patches in-process microphone reads. pcm is 16-bit little-endian, already decoded. */
+    public static native boolean enableMicTap(String wavPath, byte[] pcm, int sampleRate, int channels);
+
+    /** Stops Camera1 startPreview from streaming the real sensor. */
+    public static native boolean enableCameraBlock();
+
     public static native void addIORule(String targetPath, String relocatePath);
 
     public static native void hideXposed();

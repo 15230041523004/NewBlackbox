@@ -16,4 +16,13 @@ public final class JniHook {
     public static native void setAccessible(Class<?> clazz, Method method);
 
     public static native void setAccessible(Class<?> clazz, Field field);
+
+    /** Copies the ART method struct of {@code src} onto {@code dst}. */
+    public static native boolean copyArtMethod(Method src, Method dst);
+
+    /**
+     * Points {@code dst}'s entry at {@code src} and leaves {@code dst}'s
+     * declaring class in place.
+     */
+    public static native boolean redirectArtMethod(Method src, Method dst);
 }

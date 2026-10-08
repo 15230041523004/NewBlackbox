@@ -21,6 +21,8 @@ import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
 import top.niunaijun.blackbox.utils.Slog;
 import top.niunaijun.blackbox.BlackBoxCore;
+import top.niunaijun.blackbox.utils.MethodParameterUtils;
+import top.niunaijun.blackbox.utils.AttributionSourceUtils;
 
 
 @ScanClass(VpnCommonProxy.class)
@@ -44,6 +46,31 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     @Override
     public boolean isBadEnv() {
         return false;
+    }
+
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        MethodParameterUtils.replaceAllAppPkg(args);
+        AttributionSourceUtils.fixAttributionSourceInArgs(args);
+        try {
+            return super.invoke(proxy, method, args);
+        } catch (Throwable t) {
+            Throwable cause = t;
+            if (cause instanceof java.lang.reflect.InvocationTargetException && cause.getCause() != null) {
+                cause = cause.getCause();
+            }
+            if (cause instanceof SecurityException) {
+                Slog.w(TAG, "Suppressed SecurityException in Connectivity." + method.getName() + ": " + cause.getMessage());
+                Class<?> returnType = method.getReturnType();
+                if (returnType == boolean.class || returnType == Boolean.class) {
+                    return false;
+                } else if (returnType == int.class || returnType == Integer.class) {
+                    return 0;
+                }
+                return null;
+            }
+            throw t;
+        }
     }
 
     

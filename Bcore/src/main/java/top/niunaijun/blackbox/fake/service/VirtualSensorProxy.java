@@ -10,10 +10,13 @@ import android.os.Looper;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.fake.hook.ClassInvocationStub;
 import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
@@ -36,9 +39,56 @@ import top.niunaijun.blackbox.utils.VirtualSensorEmitter;
 public class VirtualSensorProxy extends ClassInvocationStub {
     public static final String TAG = "VirtualSensorProxy";
 
-    /** Map of listener → handler used for synthetic event delivery. */
-    private static final Map<SensorEventListener, VirtualSensorEmitter>
+    /** Listeners currently receiving synthetic motion, possibly one emitter per sensor. */
+    private static final Map<SensorEventListener, List<VirtualSensorEmitter>>
             sEmitters = new ConcurrentHashMap<>();
+
+    /**
+     * @return true when the call was satisfied by the virtual emitter and the
+     * real sensor must not be registered.
+     */
+    public static boolean handleRegister(SensorEventListener listener, Sensor sensor, Handler handler) {
+        if (listener == null || sensor == null) return false;
+        String pkg = VirtualResourceManager.currentPackage();
+        if (!VirtualResourceManager.spoofSensors(pkg)) return false;
+        int type = sensor.getType();
+        if (type != Sensor.TYPE_ACCELEROMETER
+                && type != Sensor.TYPE_GYROSCOPE
+                && type != Sensor.TYPE_STEP_COUNTER
+                && type != Sensor.TYPE_STEP_DETECTOR) {
+            return false;
+        }
+        SensorScenario scenario = VirtualResourceManager.scenarioOrStationary(pkg);
+        if (handler == null) handler = new Handler(Looper.getMainLooper());
+        VirtualSensorEmitter emitter = new VirtualSensorEmitter(listener, sensor, scenario, handler);
+        List<VirtualSensorEmitter> list = sEmitters.get(listener);
+        if (list == null) {
+            list = Collections.synchronizedList(new ArrayList<VirtualSensorEmitter>());
+            List<VirtualSensorEmitter> raced = sEmitters.putIfAbsent(listener, list);
+            if (raced != null) list = raced;
+        }
+        list.add(emitter);
+        emitter.start();
+        Slog.d(TAG, "virtual sensor type=" + type + " motion=" + scenario.motionMode);
+        return true;
+    }
+
+    public static void stopVirtual(SensorEventListener listener, Sensor sensor) {
+        if (listener == null) return;
+        List<VirtualSensorEmitter> list = sEmitters.get(listener);
+        if (list == null) return;
+        synchronized (list) {
+            Iterator<VirtualSensorEmitter> it = list.iterator();
+            while (it.hasNext()) {
+                VirtualSensorEmitter emitter = it.next();
+                if (emitter.matches(sensor)) {
+                    emitter.stop();
+                    it.remove();
+                }
+            }
+        }
+        if (list.isEmpty()) sEmitters.remove(listener);
+    }
 
     public VirtualSensorProxy() {
         super();
@@ -74,38 +124,13 @@ public class VirtualSensorProxy extends ClassInvocationStub {
 
             SensorEventListener listener = (SensorEventListener) args[0];
             Sensor sensor = (Sensor) args[1];
-
-            String pkg = BlackBoxCore.get().getHostPkg();
-            SensorScenario scenario = VirtualResourceManager.getSensorScenario(pkg);
-            if (scenario == null) {
-                // no virtual scenario – delegate to real sensor
-                return method.invoke(who, args);
+            Handler handler = null;
+            if (args.length >= 4 && args[3] instanceof Handler) {
+                handler = (Handler) args[3];
+            } else if (args.length >= 5 && args[4] instanceof Handler) {
+                handler = (Handler) args[4];
             }
-
-            int type = sensor.getType();
-            if (type == Sensor.TYPE_ACCELEROMETER
-                    || type == Sensor.TYPE_GYROSCOPE
-                    || type == Sensor.TYPE_STEP_COUNTER
-                    || type == Sensor.TYPE_STEP_DETECTOR) {
-
-                // Extract or create a handler
-                Handler handler = null;
-                if (args.length >= 4 && args[3] instanceof Handler) {
-                    handler = (Handler) args[3];
-                }
-                if (handler == null) {
-                    handler = new Handler(Looper.getMainLooper());
-                }
-
-                VirtualSensorEmitter emitter = new VirtualSensorEmitter(
-                        listener, sensor, scenario, handler);
-                sEmitters.put(listener, emitter);
-                emitter.start();
-                Slog.d(TAG, "Started virtual sensor emitter for type=" + type
-                        + " scenario=" + scenario.motionMode);
-                return true;
-            }
-
+            if (handleRegister(listener, sensor, handler)) return true;
             return method.invoke(who, args);
         }
     }
@@ -114,14 +139,9 @@ public class VirtualSensorProxy extends ClassInvocationStub {
     public static class UnregisterListener extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            if (args != null && args.length >= 1
-                    && args[0] instanceof SensorEventListener) {
-                VirtualSensorEmitter emitter = sEmitters.remove(args[0]);
-                if (emitter != null) {
-                    emitter.stop();
-                    Slog.d(TAG, "Stopped virtual sensor emitter");
-                    return null;
-                }
+            if (args != null && args.length >= 1 && args[0] instanceof SensorEventListener) {
+                Sensor sensor = args.length >= 2 && args[1] instanceof Sensor ? (Sensor) args[1] : null;
+                stopVirtual((SensorEventListener) args[0], sensor);
             }
             return method.invoke(who, args);
         }

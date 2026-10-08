@@ -16,6 +16,7 @@
 #include "Utils/HexDump.h"
 #include "hidden_api.h"
 #include "Utils/VirtualSpoof.h"
+#include "Utils/SpoofAudioHook.h"
 
 struct {
     JavaVM *vm;
@@ -143,6 +144,8 @@ static JNINativeMethod gMethods[] = {
         {"hideXposed", "()V",                                     (void *) hideXposed},
         {"addIORule",  "(Ljava/lang/String;Ljava/lang/String;)V", (void *) addIORule},
         {"enableIO",   "()V",                                     (void *) enableIO},
+        {"enableMicTap", "(Ljava/lang/String;[BII)Z",             (void *) enableMicTap},
+        {"enableCameraBlock", "()Z",                             (void *) enableCameraBlock},
         {"init",       "(I)V",                                    (void *) init},
 };
 
