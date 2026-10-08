@@ -685,7 +685,11 @@ public class IActivityManagerProxy extends ClassInvocationStub {
                 args[flagsIndex] = flags;
             }
 
-            return method.invoke(who, args);
+            Object result = method.invoke(who, args);
+            if (result instanceof Intent) {
+                return top.niunaijun.blackbox.utils.DebugStatePolicy.guestUsbState((Intent) result);
+            }
+            return result;
         }
 
         public int getReceiverIndex() {
@@ -727,7 +731,11 @@ public class IActivityManagerProxy extends ClassInvocationStub {
             if (args[permissionIndex] != null) {
                 args[permissionIndex] = null;
             }
-            return method.invoke(who, args);
+            Object result = method.invoke(who, args);
+            if (result instanceof Intent) {
+                return top.niunaijun.blackbox.utils.DebugStatePolicy.guestUsbState((Intent) result);
+            }
+            return result;
         }
     }
 

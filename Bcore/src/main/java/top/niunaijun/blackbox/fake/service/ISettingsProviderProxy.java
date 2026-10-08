@@ -43,9 +43,17 @@ public class ISettingsProviderProxy extends ClassInvocationStub {
                 
                 if (args != null && args.length > 0) {
                     String key = (String) args[0];
-                    if (key != null && key.contains("feature_flag")) {
-                        Slog.d(TAG, "Intercepting feature flag query: " + key + ", returning safe default");
-                        return "true"; 
+                    if (key != null) {
+                        // Intercept feature flag queries
+                        if (key.contains("feature_flag")) {
+                            Slog.d(TAG, "Intercepting feature flag query: " + key + ", returning safe default");
+                            return "true";
+                        }
+                        // Intercept ADB/debug related settings and hide them
+                        if (key.equals("adb_enabled") || key.equals("adb_wifi_enabled") || key.equals("development_settings_enabled")) {
+                            Slog.d(TAG, "Intercepting debug setting query: " + key + ", returning 0");
+                            return "0";
+                        }
                     }
                 }
                 
@@ -70,9 +78,17 @@ public class ISettingsProviderProxy extends ClassInvocationStub {
                 
                 if (args != null && args.length > 0) {
                     String key = (String) args[0];
-                    if (key != null && key.contains("feature_flag")) {
-                        Slog.d(TAG, "Intercepting feature flag query: " + key + ", returning safe default");
-                        return "true"; 
+                    if (key != null) {
+                        // Intercept feature flag queries
+                        if (key.contains("feature_flag")) {
+                            Slog.d(TAG, "Intercepting feature flag query: " + key + ", returning safe default");
+                            return "true";
+                        }
+                        // Intercept debug settings
+                        if (key.equals("adb_enabled") || key.equals("adb_wifi_enabled") || key.equals("development_settings_enabled")) {
+                            Slog.d(TAG, "Intercepting debug setting query: " + key + ", returning 0");
+                            return "0";
+                        }
                     }
                 }
                 
@@ -94,12 +110,20 @@ public class ISettingsProviderProxy extends ClassInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             try {
+                // Intercept debug settings and hide them
+                if (args != null && args.length > 0) {
+                    String key = (String) args[0];
+                    if (key != null && (key.equals("adb_enabled") || key.equals("adb_wifi_enabled") || key.equals("development_settings_enabled"))) {
+                        Slog.d(TAG, "Intercepting debug setting query: " + key + ", returning 0");
+                        return 0;
+                    }
+                }
                 return method.invoke(who, args);
             } catch (Exception e) {
                 String errorMsg = e.getMessage();
                 if (errorMsg != null && errorMsg.contains("Calling uid") && errorMsg.contains("doesn't match source uid")) {
                     Slog.w(TAG, "UID mismatch in getIntForUser, returning safe default: " + errorMsg);
-                    return 1; 
+                    return 0;
                 }
                 throw e;
             }
@@ -111,12 +135,20 @@ public class ISettingsProviderProxy extends ClassInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             try {
+                // Intercept debug settings and hide them
+                if (args != null && args.length > 0) {
+                    String key = (String) args[0];
+                    if (key != null && (key.equals("adb_enabled") || key.equals("adb_wifi_enabled") || key.equals("development_settings_enabled"))) {
+                        Slog.d(TAG, "Intercepting debug setting query: " + key + ", returning 0");
+                        return 0;
+                    }
+                }
                 return method.invoke(who, args);
             } catch (Exception e) {
                 String errorMsg = e.getMessage();
                 if (errorMsg != null && errorMsg.contains("Calling uid") && errorMsg.contains("doesn't match source uid")) {
                     Slog.w(TAG, "UID mismatch in getInt, returning safe default: " + errorMsg);
-                    return 1; 
+                    return 0;
                 }
                 throw e;
             }

@@ -9,6 +9,9 @@ public abstract class ClientConfiguration {
         return false;
     }
 
+    /** Guest-only view; hosts that do not opt in retain the real debugging state. */
+    public boolean isHideAdb(int userId) { return false; }
+
 
 
     public abstract String getHostPackageName();

@@ -1261,6 +1261,11 @@ public class BlackBoxCore extends ClientConfiguration {
     }
 
     @Override
+    public boolean isHideAdb(int userId) {
+        return mClientConfiguration != null && mClientConfiguration.isHideAdb(userId);
+    }
+
+    @Override
     public boolean isDisableFlagSecure() {
         return mClientConfiguration.isDisableFlagSecure();
     }

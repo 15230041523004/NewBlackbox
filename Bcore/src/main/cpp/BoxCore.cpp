@@ -15,6 +15,7 @@
 #include <Hook/RuntimeHook.h>
 #include "Utils/HexDump.h"
 #include "hidden_api.h"
+#include "Utils/VirtualSpoof.h"
 
 struct {
     JavaVM *vm;
@@ -131,7 +132,12 @@ bool disableResourceLoading(JNIEnv *env, jclass clazz) {
     return true;
 }
 
+void setHideAdb(JNIEnv*, jclass, jboolean enabled) {
+    set_guest_adb_hidden(enabled == JNI_TRUE);
+}
+
 static JNINativeMethod gMethods[] = {
+        {"setHideAdb", "(Z)V",                                    (void *) setHideAdb},
         {"disableHiddenApi", "()Z",                               (void *) disableHiddenApi},
         {"disableResourceLoading", "()Z",                         (void *) disableResourceLoading},
         {"hideXposed", "()V",                                     (void *) hideXposed},

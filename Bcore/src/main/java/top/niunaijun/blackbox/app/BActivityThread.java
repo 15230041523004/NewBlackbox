@@ -184,6 +184,9 @@ public class BActivityThread extends IBActivityThread.Stub {
                 throw new RuntimeException("reject init process: " + appConfig.processName + ", this process is : " + this.mAppConfig.processName);
             }
             this.mAppConfig = appConfig;
+            boolean hideAdb = BlackBoxCore.get().isHideAdb(appConfig.userId);
+            top.niunaijun.blackbox.utils.DebugStatePolicy.configure(hideAdb);
+            NativeCore.setHideAdb(hideAdb);
             IBinder iBinder = asBinder();
             try {
                 iBinder.linkToDeath(new DeathRecipient() {
@@ -1222,7 +1225,7 @@ public class BActivityThread extends IBActivityThread.Stub {
         }
         mH.post(() -> {
             BroadcastReceiver mReceiver = null;
-            Intent intent = data.intent;
+            Intent intent = top.niunaijun.blackbox.utils.DebugStatePolicy.guestUsbState(data.intent);
             ActivityInfo activityInfo = data.activityInfo;
             BroadcastReceiver.PendingResult pendingResult = data.data.build();
 

@@ -82,6 +82,11 @@ public class BUserManagerService extends IBUserManagerService.Stub implements IS
     public void deleteUser(int userId) throws RemoteException {
         synchronized (mUserLock) {
             synchronized (mUsers) {
+                try {
+                    top.niunaijun.blackbox.core.env.ProfileEnvironment.setAdbHidden(userId, true);
+                } catch (java.io.IOException e) {
+                    throw new IllegalStateException("Cannot remove profile environment policy", e);
+                }
                 BPackageManagerService.get().deleteUser(userId);
 
                 mUsers.remove(userId);

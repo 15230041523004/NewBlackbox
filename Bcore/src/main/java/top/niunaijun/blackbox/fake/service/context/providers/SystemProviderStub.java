@@ -51,6 +51,8 @@ public class SystemProviderStub extends ClassInvocationStub implements BContentP
         
         
         if ("call".equals(methodName)) {
+            Object debugResult = top.niunaijun.blackbox.utils.DebugStatePolicy.interceptSettingsCall(args);
+            if (debugResult != top.niunaijun.blackbox.utils.DebugStatePolicy.UNHANDLED) return debugResult;
             if (args != null) {
                 Class<?> attributionSourceClass = BRAttributionSource.getRealClass();
                 for (int i = 0; i < args.length; i++) {
@@ -100,7 +102,18 @@ public class SystemProviderStub extends ClassInvocationStub implements BContentP
                 }
             }
         }
-        return method.invoke(mBase, args);
+        Object result = method.invoke(mBase, args);
+        if ("query".equals(methodName) && result instanceof android.database.Cursor
+                && top.niunaijun.blackbox.utils.DebugStatePolicy.isEnabled() && args != null) {
+            for (Object arg : args) {
+                if (arg instanceof android.net.Uri
+                        && top.niunaijun.blackbox.utils.DebugStatePolicy.isSettingsUri((android.net.Uri) arg)) {
+                    return new DebugSettingsCursor((android.database.Cursor) result,
+                            SettingsProviderStub.querySettingName(args, (android.net.Uri) arg));
+                }
+            }
+        }
+        return result;
     }
 
     private boolean isSystemProviderAuthority(String authority) {

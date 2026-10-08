@@ -27,6 +27,7 @@ public class NativeCore {
     }
 
     public static native void init(int apiLevel);
+    public static native void setHideAdb(boolean enabled);
 
     public static native void enableIO();
 

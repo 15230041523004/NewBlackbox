@@ -22,6 +22,8 @@ import black.android.providers.BRSettingsSystem;
 import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.fake.service.context.providers.ContentProviderStub;
 import top.niunaijun.blackbox.fake.service.context.providers.SystemProviderStub;
+import top.niunaijun.blackbox.fake.service.context.providers.SettingsProviderStub;
+import top.niunaijun.blackbox.utils.Reflector;
 import top.niunaijun.blackbox.utils.compat.BuildCompat;
 
 
@@ -41,9 +43,11 @@ public class ContentProviderDelegate {
             return;
         IInterface bContentProvider;
         switch (auth) {
+            case "settings":
+                bContentProvider = new SettingsProviderStub().wrapper(iInterface, BlackBoxCore.getHostPkg());
+                break;
             case "media":
             case "telephony":
-            case "settings":
                 bContentProvider = new SystemProviderStub().wrapper(iInterface, BlackBoxCore.getHostPkg());
                 break;
             default:
@@ -73,7 +77,10 @@ public class ContentProviderDelegate {
             if (!sInjected.contains(providerName)) {
                 sInjected.add(providerName);
                 final IInterface iInterface = BRActivityThreadProviderClientRecordP.get(value).mProvider();
-                BRActivityThreadProviderClientRecordP.get(value)._set_mProvider(new ContentProviderStub().wrapper(iInterface, BlackBoxCore.getHostPkg()));
+                BRActivityThreadProviderClientRecordP.get(value)._set_mProvider(
+                        "settings".equals(providerName)
+                                ? new SettingsProviderStub().wrapper(iInterface, BlackBoxCore.getHostPkg())
+                                : new ContentProviderStub().wrapper(iInterface, BlackBoxCore.getHostPkg()));
                 BRActivityThreadProviderClientRecordP.get(value)._set_mNames(new String[]{providerName});
             }
         }
@@ -98,6 +105,14 @@ public class ContentProviderDelegate {
     }
 
     private static void clearContentProvider(Object cache) {
+        // Host bootstrap may have read these values before the guest policy was activated.
+        try {
+            synchronized (cache) {
+                Object values = Reflector.with(cache).field("mValues").get();
+                if (values instanceof java.util.Map) ((java.util.Map<?, ?>) values).clear();
+            }
+        } catch (Throwable ignored) {
+        }
         if (BuildCompat.isOreo()) {
             Object holder = BRSettingsNameValueCacheOreo.get(cache).mProviderHolder();
             if (holder != null) {

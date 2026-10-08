@@ -67,6 +67,7 @@ public class InnerReceiverDelegate extends IIntentReceiver.Stub {
         }
         IIntentReceiver iIntentReceiver = mIntentReceiver.get();
         if (iIntentReceiver != null) {
+            perIntent = top.niunaijun.blackbox.utils.DebugStatePolicy.guestUsbState(perIntent);
             BRIIntentReceiver.get(iIntentReceiver).performReceive(perIntent, resultCode, data, extras, ordered, sticky, sendingUser);
         }
     }

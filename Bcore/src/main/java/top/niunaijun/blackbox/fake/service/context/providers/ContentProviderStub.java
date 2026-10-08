@@ -46,6 +46,10 @@ public class ContentProviderStub extends ClassInvocationStub implements BContent
         }
 
         String methodName = method.getName();
+        if ("call".equals(methodName)) {
+            Object debugResult = top.niunaijun.blackbox.utils.DebugStatePolicy.interceptSettingsCall(args);
+            if (debugResult != top.niunaijun.blackbox.utils.DebugStatePolicy.UNHANDLED) return debugResult;
+        }
         int targetUid = BlackBoxCore.getHostUid();
         String targetPkg = BlackBoxCore.getHostPkg();
         // External providers see the host identity. Virtual providers see the caller's BUid.
