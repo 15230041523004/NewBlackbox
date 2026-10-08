@@ -52,16 +52,9 @@ public class NativeCore {
             if (origCallingUid == BlackBoxCore.getHostUid()) {
                 
                 String appPackageName = BlackBoxCore.getAppPackageName();
-                if (appPackageName != null && appPackageName.equals("com.google.android.gms")){
-                    
-                }
-                
-                
-                
                 if (appPackageName != null && appPackageName.equals("com.google.android.webview")){
                     return Process.myUid();
                 }
-                
                 
                 try {
                     int callingBUid = BlackBoxCore.getCallingBUid();
@@ -71,28 +64,6 @@ public class NativeCore {
                 } catch (Exception e) {
                     Log.w(TAG, "Error getting calling BUid: " + e.getMessage());
                 }
-                
-                
-                try {
-                    StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
-                    for (StackTraceElement element : stackTrace) {
-                        String className = element.getClassName();
-                        String methodName = element.getMethodName();
-                        
-                        
-                        if ((className.contains("Settings") || className.contains("FeatureFlag")) &&
-                            (methodName.contains("getString") || methodName.contains("getInt") || 
-                             methodName.contains("getLong") || methodName.contains("getFloat"))) {
-                            
-                            Log.d(TAG, "System settings access detected, using system UID to prevent mismatch");
-                            
-                            return Process.SYSTEM_UID; 
-                        }
-                    }
-                } catch (Exception e) {
-                    Log.w(TAG, "Error analyzing stack trace for UID resolution: " + e.getMessage());
-                }
-                
                 
                 return BlackBoxCore.getHostUid();
             }

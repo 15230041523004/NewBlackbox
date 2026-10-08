@@ -13,6 +13,7 @@ import black.android.os.BRServiceManager;
 import top.niunaijun.blackbox.fake.hook.BinderInvocationStub;
 import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
+import top.niunaijun.blackbox.BlackBoxCore;
 
 
 public class IWifiManagerProxy extends BinderInvocationStub {
@@ -42,7 +43,17 @@ public class IWifiManagerProxy extends BinderInvocationStub {
         
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            // WifiService validates callingPackage against the real Binder UID.
+            // Keep the attribution tag intact and support older no-argument signatures.
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            if (args != null && args.length > 0 && parameterTypes.length > 0
+                    && parameterTypes[0] == String.class) {
+                args[0] = BlackBoxCore.getHostPkg();
+            }
             WifiInfo wifiInfo = (WifiInfo) method.invoke(who, args);
+            if (wifiInfo == null) {
+                return null;
+            }
             BRWifiInfo.get(wifiInfo)._set_mBSSID("ac:62:5a:82:65:c4");
             BRWifiInfo.get(wifiInfo)._set_mMacAddress("ac:62:5a:82:65:c4");
             BRWifiInfo.get(wifiInfo)._set_mWifiSsid(BRWifiSsid.get().createFromAsciiEncoded("BlackBox_Wifi"));

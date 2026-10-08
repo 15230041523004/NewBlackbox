@@ -19,14 +19,18 @@ public class ContextCompat {
     public static final String TAG = "ContextCompat";
 
     public static void fixAttributionSourceState(Object obj, int uid) {
+        fixAttributionSourceState(obj, uid, BlackBoxCore.getHostPkg());
+    }
+
+    public static void fixAttributionSourceState(Object obj, int uid, String packageName) {
         Object mAttributionSourceState;
         if (obj != null && BRAttributionSource.get(obj)._check_mAttributionSourceState() != null) {
             mAttributionSourceState = BRAttributionSource.get(obj).mAttributionSourceState();
 
             AttributionSourceStateContext attributionSourceStateContext = BRAttributionSourceState.get(mAttributionSourceState);
-            attributionSourceStateContext._set_packageName(BlackBoxCore.getHostPkg());
+            attributionSourceStateContext._set_packageName(packageName);
             attributionSourceStateContext._set_uid(uid);
-            fixAttributionSourceState(BRAttributionSource.get(obj).getNext(), uid);
+            fixAttributionSourceState(BRAttributionSource.get(obj).getNext(), uid, packageName);
         }
     }
 

@@ -199,29 +199,51 @@ public class BAccountManagerService extends IBAccountManagerService.Stub impleme
 
     @Override
     public AuthenticatorDescription[] getAuthenticatorTypes(int userId) throws RemoteException {
-        
-        BUserAccounts userAccounts = getUserAccounts(userId);
         List<AuthenticatorDescription> authenticatorDescriptions = new ArrayList<>();
-        synchronized (userAccounts.lock) {
-            for (BAccount account : userAccounts.accounts) {
-                AuthenticatorInfo authenticatorInfo = mAuthenticatorCache.authenticators.get(account.account.type);
-                if (authenticatorInfo != null) {
+        synchronized (mAuthenticatorCache) {
+            if (mAuthenticatorCache.authenticators.isEmpty()) {
+                loadAuthenticatorCache(null);
+            }
+            for (AuthenticatorInfo authenticatorInfo : mAuthenticatorCache.authenticators.values()) {
+                if (authenticatorInfo != null && authenticatorInfo.desc != null) {
                     authenticatorDescriptions.add(authenticatorInfo.desc);
                 }
             }
         }
-        return authenticatorDescriptions.toArray(new AuthenticatorDescription[]{});
+        try {
+            android.accounts.AccountManager hostAm = android.accounts.AccountManager.get(BlackBoxCore.getContext());
+            if (hostAm != null) {
+                AuthenticatorDescription[] hostTypes = hostAm.getAuthenticatorTypes();
+                if (hostTypes != null) {
+                    for (AuthenticatorDescription desc : hostTypes) {
+                        if (desc != null && desc.type != null) {
+                            boolean found = false;
+                            for (AuthenticatorDescription existing : authenticatorDescriptions) {
+                                if (existing != null && desc.type.equals(existing.type)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) {
+                                authenticatorDescriptions.add(desc);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return authenticatorDescriptions.toArray(new AuthenticatorDescription[0]);
     }
 
     @Override
     public Account[] getAccountsForPackage(String packageName, int uid, int userId) throws RemoteException {
-        
         BUserAccounts userAccounts = getUserAccounts(userId);
         List<Account> accounts = new ArrayList<>();
         synchronized (userAccounts.lock) {
             for (BAccount account : userAccounts.accounts) {
                 Integer visibility = account.visibility.get(packageName);
-                if (visibility != null && visibility == AccountManager.VISIBILITY_VISIBLE) {
+                if (visibility == null || visibility == AccountManager.VISIBILITY_VISIBLE || visibility == AccountManager.VISIBILITY_USER_MANAGED_VISIBLE) {
                     accounts.add(account.account);
                 }
             }
@@ -231,14 +253,13 @@ public class BAccountManagerService extends IBAccountManagerService.Stub impleme
 
     @Override
     public Account[] getAccountsByTypeForPackage(String type, String packageName, int userId) throws RemoteException {
-        
         BUserAccounts userAccounts = getUserAccounts(userId);
         List<Account> accounts = new ArrayList<>();
         synchronized (userAccounts.lock) {
             for (BAccount account : userAccounts.accounts) {
                 if (account.account.type.equals(type)) {
                     Integer visibility = account.visibility.get(packageName);
-                    if (visibility != null && visibility == AccountManager.VISIBILITY_VISIBLE) {
+                    if (visibility == null || visibility == AccountManager.VISIBILITY_VISIBLE || visibility == AccountManager.VISIBILITY_USER_MANAGED_VISIBLE) {
                         accounts.add(account.account);
                     }
                 }
@@ -1354,34 +1375,90 @@ public class BAccountManagerService extends IBAccountManagerService.Stub impleme
 
     private static AuthenticatorDescription parseAuthenticatorDescription(Resources resources, String packageName,
                                                                           AttributeSet attributeSet) {
-        RstyleableStatic rstyleableStatic = BRRstyleable.get();
-        TypedArray array = resources.obtainAttributes(attributeSet, rstyleableStatic.AccountAuthenticator());
+        String accountType = null;
+        int label = 0;
+        int icon = 0;
+        int smallIcon = 0;
+        int accountPreferences = 0;
+        boolean customTokens = false;
+
         try {
-            String accountType = array.getString(rstyleableStatic.AccountAuthenticator_accountType());
-            int label = array.getResourceId(rstyleableStatic.AccountAuthenticator_label(), 0);
-            int icon = array.getResourceId(rstyleableStatic.AccountAuthenticator_icon(), 0);
-            int smallIcon = array.getResourceId(rstyleableStatic.AccountAuthenticator_smallIcon(), 0);
-            int accountPreferences = array.getResourceId(rstyleableStatic.AccountAuthenticator_accountPreferences(), 0);
-            boolean customTokens = array.getBoolean(rstyleableStatic.AccountAuthenticator_customTokens(), false);
-            if (TextUtils.isEmpty(accountType)) {
-                return null;
+            RstyleableStatic rstyleableStatic = BRRstyleable.get();
+            if (rstyleableStatic != null) {
+                int[] styleable = rstyleableStatic.AccountAuthenticator();
+                if (styleable != null && resources != null) {
+                    TypedArray array = resources.obtainAttributes(attributeSet, styleable);
+                    if (array != null) {
+                        try {
+                            accountType = array.getString(rstyleableStatic.AccountAuthenticator_accountType());
+                            label = array.getResourceId(rstyleableStatic.AccountAuthenticator_label(), 0);
+                            icon = array.getResourceId(rstyleableStatic.AccountAuthenticator_icon(), 0);
+                            smallIcon = array.getResourceId(rstyleableStatic.AccountAuthenticator_smallIcon(), 0);
+                            accountPreferences = array.getResourceId(rstyleableStatic.AccountAuthenticator_accountPreferences(), 0);
+                            customTokens = array.getBoolean(rstyleableStatic.AccountAuthenticator_customTokens(), false);
+                        } finally {
+                            array.recycle();
+                        }
+                    }
+                }
             }
-            return new AuthenticatorDescription(accountType, packageName, label, icon, smallIcon, accountPreferences,
-                    customTokens);
-        } finally {
-            array.recycle();
+        } catch (Throwable ignored) {
         }
+
+        if (TextUtils.isEmpty(accountType)) {
+            int resId = attributeSet.getAttributeResourceValue("http://schemas.android.com/apk/res/android", "accountType", 0);
+            if (resId != 0 && resources != null) {
+                try {
+                    accountType = resources.getString(resId);
+                } catch (Throwable ignored) {
+                }
+            }
+            if (TextUtils.isEmpty(accountType)) {
+                accountType = attributeSet.getAttributeValue("http://schemas.android.com/apk/res/android", "accountType");
+            }
+            if (label == 0) {
+                label = attributeSet.getAttributeResourceValue("http://schemas.android.com/apk/res/android", "label", 0);
+            }
+            if (icon == 0) {
+                icon = attributeSet.getAttributeResourceValue("http://schemas.android.com/apk/res/android", "icon", 0);
+            }
+            if (smallIcon == 0) {
+                smallIcon = attributeSet.getAttributeResourceValue("http://schemas.android.com/apk/res/android", "smallIcon", 0);
+            }
+            if (accountPreferences == 0) {
+                accountPreferences = attributeSet.getAttributeResourceValue("http://schemas.android.com/apk/res/android", "accountPreferences", 0);
+            }
+            customTokens = attributeSet.getAttributeBooleanValue("http://schemas.android.com/apk/res/android", "customTokens", false);
+        }
+
+        if (TextUtils.isEmpty(accountType)) {
+            return null;
+        }
+        return new AuthenticatorDescription(accountType, packageName, label, icon, smallIcon, accountPreferences, customTokens);
     }
 
     public void loadAuthenticatorCache(String packageName) {
-        mAuthenticatorCache.authenticators.clear();
-        Intent intent = new Intent(AccountManager.ACTION_AUTHENTICATOR_INTENT);
-        if (packageName != null) {
-            intent.setPackage(packageName);
+        synchronized (mAuthenticatorCache) {
+            if (packageName == null) {
+                mAuthenticatorCache.authenticators.clear();
+            } else {
+                Iterator<Map.Entry<String, AuthenticatorInfo>> it = mAuthenticatorCache.authenticators.entrySet().iterator();
+                while (it.hasNext()) {
+                    Map.Entry<String, AuthenticatorInfo> entry = it.next();
+                    if (entry.getValue() != null && entry.getValue().serviceInfo != null &&
+                            packageName.equals(entry.getValue().serviceInfo.packageName)) {
+                        it.remove();
+                    }
+                }
+            }
+            Intent intent = new Intent(AccountManager.ACTION_AUTHENTICATOR_INTENT);
+            if (packageName != null) {
+                intent.setPackage(packageName);
+            }
+            generateServicesMap(
+                    mPms.queryIntentServices(intent, PackageManager.GET_META_DATA, BUserHandle.USER_ALL),
+                    mAuthenticatorCache.authenticators, new RegisteredServicesParser());
         }
-        generateServicesMap(
-                mPms.queryIntentServices(intent, PackageManager.GET_META_DATA, BUserHandle.USER_ALL),
-                mAuthenticatorCache.authenticators, new RegisteredServicesParser());
     }
 
     private void generateServicesMap(List<ResolveInfo> services, Map<String, AuthenticatorInfo> map,
@@ -1800,8 +1877,11 @@ public class BAccountManagerService extends IBAccountManagerService.Stub impleme
     private String getCallingPackageName() {
         int callingPid = Binder.getCallingPid();
         ProcessRecord processByPid = BProcessManagerService.get().findProcessByPid(callingPid);
-        if (processByPid == null)
-            throw new IllegalArgumentException("ProcessRecord is null, PID: " + callingPid);
+        if (processByPid == null) {
+            String pkg = top.niunaijun.blackbox.app.BActivityThread.getAppPackageName();
+            if (pkg != null) return pkg;
+            return BlackBoxCore.getHostPkg();
+        }
         return processByPid.getPackageName();
     }
 }

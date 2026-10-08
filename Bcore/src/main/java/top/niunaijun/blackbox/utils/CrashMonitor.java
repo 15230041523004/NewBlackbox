@@ -43,6 +43,7 @@ public class CrashMonitor {
     
     private static boolean sIsMonitoring = false;
     private static Handler sMainHandler;
+    private static Thread.UncaughtExceptionHandler sOriginalHandler;
     
     
     public static class CrashInfo {
@@ -136,19 +137,19 @@ public class CrashMonitor {
     
     private static void installGlobalCrashHandlers() {
         try {
-            
+            sOriginalHandler = Thread.getDefaultUncaughtExceptionHandler();
             Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
                 @Override
                 public void uncaughtException(Thread thread, Throwable throwable) {
-                    handleCrash("JavaException", thread, throwable);
+                    boolean handled = handleCrash("JavaException", thread, throwable);
+                    if (!handled && sOriginalHandler != null) {
+                        sOriginalHandler.uncaughtException(thread, throwable);
+                    }
                 }
             });
             
-            
             installSystemErrorHandler();
-            
             Slog.d(TAG, "Global crash handlers installed");
-            
         } catch (Exception e) {
             Slog.w(TAG, "Failed to install global crash handlers: " + e.getMessage());
         }
@@ -215,10 +216,9 @@ public class CrashMonitor {
     }
     
     
-    public static void handleCrash(String crashType, Thread thread, Throwable throwable) {
+    public static boolean handleCrash(String crashType, Thread thread, Throwable throwable) {
         try {
             sTotalCrashes.incrementAndGet();
-            
             
             if (crashType.equals("JavaException")) {
                 sJavaCrashes.incrementAndGet();
@@ -226,16 +226,15 @@ public class CrashMonitor {
                 sNativeCrashes.incrementAndGet();
             }
             
-            
             CrashInfo crashInfo = createCrashInfo(crashType, thread, throwable);
             
-            
-            Slog.w(TAG, "Crash detected: " + crashInfo);
-            
+            Slog.e(TAG, "FATAL CRASH detected in " + crashInfo.packageName + " [thread: " + (thread != null ? thread.getName() : "unknown") + "]: " + crashInfo.errorMessage);
+            if (throwable != null) {
+                android.util.Log.e(TAG, "FATAL EXCEPTION TRACE:\n" + android.util.Log.getStackTraceString(throwable));
+            }
             
             String crashKey = crashType + "_" + System.currentTimeMillis();
             sCrashHistory.put(crashKey, crashInfo);
-            
             
             boolean recovered = attemptCrashRecovery(crashInfo);
             
@@ -249,11 +248,11 @@ public class CrashMonitor {
                 Slog.w(TAG, "Crash recovery failed");
             }
             
-            
             writeCrashLog(crashInfo);
-            
+            return recovered;
         } catch (Exception e) {
-            Slog.e(TAG, "Error handling crash: " + e.getMessage());
+            Slog.e(TAG, "Error handling crash: " + e.getMessage(), e);
+            return false;
         }
     }
     
@@ -488,18 +487,13 @@ public class CrashMonitor {
         
         @Override
         public boolean canHandle(String crashType, String errorMessage) {
-            return crashType.equals("JavaException");
+            // Uncaught thread exceptions terminate the thread; do not falsely claim recovery
+            return false;
         }
         
         @Override
         public boolean attemptRecovery(CrashInfo crashInfo) {
-            try {
-                
-                return true; 
-            } catch (Exception e) {
-                Slog.w(TAG, "Java exception recovery failed: " + e.getMessage());
-                return false;
-            }
+            return false;
         }
         
         @Override

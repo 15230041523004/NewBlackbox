@@ -20,6 +20,7 @@ import top.niunaijun.blackbox.fake.hook.ScanClass;
 import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
 import top.niunaijun.blackbox.utils.Slog;
+import top.niunaijun.blackbox.BlackBoxCore;
 
 
 @ScanClass(VpnCommonProxy.class)
@@ -330,6 +331,13 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     public static class GetNetworkCapabilities extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            // Modern signatures are (Network, callingPackageName, callingAttributionTag).
+            // The system service validates the package against the real host Binder UID.
+            Class<?>[] parameterTypes = method.getParameterTypes();
+            if (args != null && args.length > 1 && parameterTypes.length > 1
+                    && parameterTypes[1] == String.class) {
+                args[1] = BlackBoxCore.getHostPkg();
+            }
             if (android.os.Build.VERSION.SDK_INT >= 21) {
                 try {
                     

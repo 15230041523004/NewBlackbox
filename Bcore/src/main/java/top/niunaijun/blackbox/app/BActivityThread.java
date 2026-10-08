@@ -176,7 +176,10 @@ public class BActivityThread extends IBActivityThread.Stub {
 
     public void initProcess(AppConfig appConfig) {
         synchronized (mConfigLock) {
-            if (this.mAppConfig != null && !this.mAppConfig.packageName.equals(appConfig.packageName)) {
+            if (this.mAppConfig != null && (!this.mAppConfig.packageName.equals(appConfig.packageName)
+                    || !this.mAppConfig.processName.equals(appConfig.processName)
+                    || this.mAppConfig.userId != appConfig.userId
+                    || this.mAppConfig.bpid != appConfig.bpid)) {
                 
                 throw new RuntimeException("reject init process: " + appConfig.processName + ", this process is : " + this.mAppConfig.processName);
             }

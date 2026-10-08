@@ -1,12 +1,17 @@
 package top.niunaijun.blackbox.fake.service;
 
 import android.accounts.Account;
+import android.accounts.AuthenticatorDescription;
 import android.accounts.IAccountManagerResponse;
 import android.content.Context;
 import android.os.Bundle;
 
 import java.lang.reflect.Method;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+
+import top.niunaijun.blackbox.app.BActivityThread;
 
 import black.android.accounts.BRIAccountManagerStub;
 import black.android.os.BRServiceManager;
@@ -73,7 +78,69 @@ public class IAccountManagerProxy extends BinderInvocationStub {
 
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return BAccountManager.get().getAuthenticatorTypes();
+            List<AuthenticatorDescription> result = new ArrayList<>();
+            try {
+                AuthenticatorDescription[] bTypes = BAccountManager.get().getAuthenticatorTypes();
+                if (bTypes != null) {
+                    for (AuthenticatorDescription d : bTypes) {
+                        if (d != null) result.add(d);
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+
+            try {
+                Object hostResult = method.invoke(who, args);
+                if (hostResult instanceof AuthenticatorDescription[]) {
+                    for (AuthenticatorDescription hd : (AuthenticatorDescription[]) hostResult) {
+                        if (hd != null) {
+                            boolean found = false;
+                            for (AuthenticatorDescription ed : result) {
+                                if (ed.type != null && ed.type.equals(hd.type)) {
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if (!found) result.add(hd);
+                        }
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+
+            String currentPkg = BActivityThread.getAppPackageName();
+            if (currentPkg == null || currentPkg.isEmpty()) {
+                currentPkg = "ru.yandex.taxi";
+            }
+
+            boolean hasPassport = false;
+            for (int i = 0; i < result.size(); i++) {
+                AuthenticatorDescription ed = result.get(i);
+                if (ed != null) {
+                    if ("com.yandex.passport".equals(ed.type) || "passport".equals(ed.type)) {
+                        if (ed.packageName == null || ed.packageName.isEmpty()) {
+                            ed = new AuthenticatorDescription(ed.type, currentPkg, ed.labelId, ed.iconId, ed.smallIconId, ed.accountPreferencesId);
+                            result.set(i, ed);
+                        }
+                        if ("com.yandex.passport".equals(ed.type)) {
+                            hasPassport = true;
+                        }
+                    } else if (ed.packageName == null || ed.packageName.isEmpty()) {
+                        ed = new AuthenticatorDescription(ed.type, currentPkg, ed.labelId, ed.iconId, ed.smallIconId, ed.accountPreferencesId);
+                        result.set(i, ed);
+                    }
+                }
+            }
+
+            if (!hasPassport) {
+                result.add(new AuthenticatorDescription("com.yandex.passport", currentPkg, 0, 0, 0, 0));
+            }
+
+            for (AuthenticatorDescription ed : result) {
+                Slog.d(TAG, "AuthenticatorType: type=" + ed.type + ", pkg=" + ed.packageName);
+            }
+
+            return result.toArray(new AuthenticatorDescription[0]);
         }
     }
 
@@ -82,7 +149,8 @@ public class IAccountManagerProxy extends BinderInvocationStub {
 
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return BAccountManager.get().getAccountsForPackage((String) args[0], (int) args[1]);
+            Account[] accounts = BAccountManager.get().getAccountsForPackage((String) args[0], (int) args[1]);
+            return accounts != null ? accounts : new Account[0];
         }
     }
 
@@ -91,7 +159,8 @@ public class IAccountManagerProxy extends BinderInvocationStub {
 
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return BAccountManager.get().getAccountsByTypeForPackage((String) args[0], (String) args[1]);
+            Account[] accounts = BAccountManager.get().getAccountsByTypeForPackage((String) args[0], (String) args[1]);
+            return accounts != null ? accounts : new Account[0];
         }
     }
 
@@ -120,7 +189,8 @@ public class IAccountManagerProxy extends BinderInvocationStub {
 
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return BAccountManager.get().getAccountsAsUser((String) args[0]);
+            Account[] accounts = BAccountManager.get().getAccountsAsUser((String) args[0]);
+            return accounts != null ? accounts : new Account[0];
         }
     }
 

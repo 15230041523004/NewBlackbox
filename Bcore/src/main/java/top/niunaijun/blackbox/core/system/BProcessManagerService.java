@@ -103,9 +103,16 @@ public class BProcessManagerService implements ISystemService {
         ActivityManager manager = (ActivityManager) BlackBoxCore.getContext().getSystemService(Context.ACTIVITY_SERVICE);
         List<ActivityManager.RunningAppProcessInfo> runningAppProcesses = manager.getRunningAppProcesses();
         Set<Integer> usingPs = new HashSet<>();
-        for (ActivityManager.RunningAppProcessInfo runningAppProcess : runningAppProcesses) {
-            int i = parseBPid(runningAppProcess.processName);
-            usingPs.add(i);
+        // Guests can rename their Linux process (for example Yandex Passport).
+        // Keep slots reserved from our records even when Android no longer reports :pN.
+        for (ProcessRecord record : mPidsSelfLocked) {
+            usingPs.add(record.bpid);
+        }
+        if (runningAppProcesses != null) {
+            for (ActivityManager.RunningAppProcessInfo runningAppProcess : runningAppProcesses) {
+                int i = parseBPid(runningAppProcess.processName);
+                usingPs.add(i);
+            }
         }
         for (int i = 0; i < ProxyManifest.FREE_COUNT; i++) {
             if (usingPs.contains(i)) {

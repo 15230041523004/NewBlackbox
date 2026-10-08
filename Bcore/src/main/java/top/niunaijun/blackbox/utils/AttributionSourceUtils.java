@@ -1,8 +1,6 @@
 package top.niunaijun.blackbox.utils;
 
 import top.niunaijun.blackbox.BlackBoxCore;
-import top.niunaijun.blackbox.app.BActivityThread;
-import top.niunaijun.blackbox.utils.Slog;
 
 
 public class AttributionSourceUtils {
@@ -10,13 +8,17 @@ public class AttributionSourceUtils {
 
     
     public static void fixAttributionSourceInArgs(Object[] args) {
+        fixAttributionSourceInArgs(args, BlackBoxCore.getHostUid(), BlackBoxCore.getHostPkg());
+    }
+
+    public static void fixAttributionSourceInArgs(Object[] args, int targetUid, String targetPkg) {
         if (args == null) return;
         
         for (int i = 0; i < args.length; i++) {
             Object arg = args[i];
             if (arg != null && arg.getClass().getName().contains("AttributionSource")) {
                 try {
-                    fixAttributionSourceUid(arg);
+                    fixAttributionSourceUid(arg, targetUid, targetPkg);
                     Slog.d(TAG, "Fixed AttributionSource UID in method arguments");
                 } catch (Exception e) {
                     Slog.w(TAG, "Failed to fix AttributionSource in args: " + e.getMessage());
@@ -29,7 +31,7 @@ public class AttributionSourceUtils {
             Object arg = args[i];
             if (arg != null && arg.getClass().getName().contains("Bundle")) {
                 try {
-                    fixAttributionSourceInBundle(arg);
+                    fixAttributionSourceInBundle(arg, targetUid, targetPkg);
                 } catch (Exception e) {
                     Slog.w(TAG, "Failed to fix AttributionSource in Bundle: " + e.getMessage());
                 }
@@ -39,12 +41,16 @@ public class AttributionSourceUtils {
 
     
     public static void fixAttributionSourceUid(Object attributionSource) {
+        fixAttributionSourceUid(attributionSource, BlackBoxCore.getHostUid(), BlackBoxCore.getHostPkg());
+    }
+
+    public static void fixAttributionSourceUid(Object attributionSource, int targetUid, String targetPkg) {
         try {
             if (attributionSource == null) return;
             
             // 1. Modern Android (API 31+): Delegation to AttributionSourceState
             try {
-                top.niunaijun.blackbox.utils.compat.ContextCompat.fixAttributionSourceState(attributionSource, BlackBoxCore.getHostUid());
+                top.niunaijun.blackbox.utils.compat.ContextCompat.fixAttributionSourceState(attributionSource, targetUid, targetPkg);
             } catch (Throwable t) {
                 // ignore
             }
@@ -57,7 +63,7 @@ public class AttributionSourceUtils {
                 try {
                     java.lang.reflect.Field uidField = attributionSourceClass.getDeclaredField(fieldName);
                     uidField.setAccessible(true);
-                    uidField.set(attributionSource, BlackBoxCore.getHostUid());
+                    uidField.set(attributionSource, targetUid);
                     Slog.d(TAG, "Fixed AttributionSource UID via field: " + fieldName);
                     break;
                 } catch (Throwable ignored) {
@@ -67,7 +73,7 @@ public class AttributionSourceUtils {
             try {
                 java.lang.reflect.Method setUidMethod = attributionSourceClass.getDeclaredMethod("setUid", int.class);
                 setUidMethod.setAccessible(true);
-                setUidMethod.invoke(attributionSource, BlackBoxCore.getHostUid());
+                setUidMethod.invoke(attributionSource, targetUid);
                 Slog.d(TAG, "Fixed AttributionSource UID via setter method");
             } catch (Throwable ignored) {
             }
@@ -78,7 +84,7 @@ public class AttributionSourceUtils {
                 try {
                     java.lang.reflect.Field packageField = attributionSourceClass.getDeclaredField(fieldName);
                     packageField.setAccessible(true);
-                    packageField.set(attributionSource, BlackBoxCore.getHostPkg());
+                    packageField.set(attributionSource, targetPkg);
                     Slog.d(TAG, "Fixed AttributionSource package name via field: " + fieldName);
                     break;
                 } catch (Throwable ignored) {
@@ -92,6 +98,10 @@ public class AttributionSourceUtils {
 
     
     public static void fixAttributionSourceInBundle(Object bundle) {
+        fixAttributionSourceInBundle(bundle, BlackBoxCore.getHostUid(), BlackBoxCore.getHostPkg());
+    }
+
+    public static void fixAttributionSourceInBundle(Object bundle, int targetUid, String targetPkg) {
         try {
             if (bundle == null) return;
             
@@ -105,7 +115,7 @@ public class AttributionSourceUtils {
                     Object value = getMethod.invoke(bundle, key);
                     
                     if (value != null && value.getClass().getName().contains("AttributionSource")) {
-                        fixAttributionSourceUid(value);
+                        fixAttributionSourceUid(value, targetUid, targetPkg);
                         Slog.d(TAG, "Fixed AttributionSource UID in Bundle key: " + key);
                     }
                 } catch (Exception e) {

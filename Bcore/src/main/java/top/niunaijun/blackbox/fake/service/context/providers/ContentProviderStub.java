@@ -4,11 +4,9 @@ import android.os.IInterface;
 
 import java.lang.reflect.Method;
 
-import black.android.content.BRAttributionSource;
 import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.fake.hook.ClassInvocationStub;
-import top.niunaijun.blackbox.utils.compat.ContextCompat;
 import top.niunaijun.blackbox.utils.Slog;
 import android.os.Bundle;
 import top.niunaijun.blackbox.utils.AttributionSourceUtils;
@@ -46,36 +44,26 @@ public class ContentProviderStub extends ClassInvocationStub implements BContent
         if ("asBinder".equals(method.getName())) {
             return method.invoke(mBase, args);
         }
-        
-        
+
         String methodName = method.getName();
-        
-        
-        
-        if ("call".equals(methodName)) {
-            
-            AttributionSourceUtils.fixAttributionSourceInArgs(args);
-        } else {
-            
-            if (args != null && args.length > 0) {
-                for (int i = 0; i < args.length; i++) {
-                    Object arg = args[i];
-                    if (arg instanceof String) {
-                        String strArg = (String) arg;
-                        
-                        if (!isSystemProviderAuthority(strArg)) {
-                            
-                            args[i] = mAppPkg;
-                        }
-                    }
-                }
-                
-                AttributionSourceUtils.fixAttributionSourceInArgs(args);
+        int targetUid = BlackBoxCore.getHostUid();
+        String targetPkg = BlackBoxCore.getHostPkg();
+        // External providers see the host identity. Virtual providers see the caller's BUid.
+        if (!BlackBoxCore.getHostPkg().equals(mAppPkg) && BActivityThread.getAppPid() != -1) {
+            int callerUid = BlackBoxCore.getBUid();
+            String callerPkg = BActivityThread.getAppPackageName();
+            if (callerUid > 0 && callerPkg != null) {
+                targetUid = callerUid;
+                targetPkg = callerPkg;
             }
         }
-        
-        
-        methodName = method.getName();
+        // Older IContentProvider signatures put callingPackage first. Other strings are
+        // authorities, call arguments or SQL expressions and must be preserved.
+        if (args != null && args.length > 0 && args[0] instanceof String) {
+            args[0] = targetPkg;
+        }
+        AttributionSourceUtils.fixAttributionSourceInArgs(args, targetUid, targetPkg);
+
         if (methodName.equals("query") || methodName.equals("insert") || 
             methodName.equals("update") || methodName.equals("delete") || 
             methodName.equals("bulkInsert") || methodName.equals("call")) {
@@ -145,20 +133,6 @@ public class ContentProviderStub extends ClassInvocationStub implements BContent
         }
     }
 
-    private boolean isSystemProviderAuthority(String authority) {
-        if (authority == null) return false;
-        
-        
-        return authority.equals("settings") || 
-               authority.equals("settings_global") || 
-               authority.equals("settings_system") || 
-               authority.equals("settings_secure") ||
-               authority.equals("media") ||
-               authority.equals("telephony") ||
-               authority.startsWith("android.provider.Settings");
-    }
-    
-    
     private boolean isUidMismatchError(Throwable error) {
         if (error == null) return false;
         
@@ -200,53 +174,6 @@ public class ContentProviderStub extends ClassInvocationStub implements BContent
     }
 
     
-    private void fixAttributionSourceUid(Object attributionSource) {
-        try {
-            if (attributionSource == null) return;
-            
-            Class<?> attributionSourceClass = attributionSource.getClass();
-            
-            
-            try {
-                java.lang.reflect.Field uidField = attributionSourceClass.getDeclaredField("mUid");
-                uidField.setAccessible(true);
-                uidField.set(attributionSource, BlackBoxCore.getHostUid());
-                Slog.d(TAG, "Fixed AttributionSource UID via field access");
-            } catch (NoSuchFieldException e) {
-                
-                try {
-                    java.lang.reflect.Field uidField = attributionSourceClass.getDeclaredField("uid");
-                    uidField.setAccessible(true);
-                    uidField.set(attributionSource, BlackBoxCore.getHostUid());
-                    Slog.d(TAG, "Fixed AttributionSource UID via alternative field");
-                } catch (NoSuchFieldException e2) {
-                    
-                    try {
-                        java.lang.reflect.Method setUidMethod = attributionSourceClass.getDeclaredMethod("setUid", int.class);
-                        setUidMethod.setAccessible(true);
-                        setUidMethod.invoke(attributionSource, BlackBoxCore.getHostUid());
-                        Slog.d(TAG, "Fixed AttributionSource UID via setter method");
-                    } catch (Exception e3) {
-                        Slog.w(TAG, "Could not fix AttributionSource UID: " + e3.getMessage());
-                    }
-                }
-            }
-            
-            
-            try {
-                java.lang.reflect.Field packageField = attributionSourceClass.getDeclaredField("mPackageName");
-                packageField.setAccessible(true);
-                packageField.set(attributionSource, mAppPkg);
-                Slog.d(TAG, "Fixed AttributionSource package name");
-            } catch (Exception e) {
-                
-            }
-            
-        } catch (Exception e) {
-            Slog.w(TAG, "Error fixing AttributionSource UID: " + e.getMessage());
-        }
-    }
-
     @Override
     public boolean isBadEnv() {
         return false;
