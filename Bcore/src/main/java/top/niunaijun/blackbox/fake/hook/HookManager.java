@@ -64,6 +64,7 @@ import top.niunaijun.blackbox.fake.service.NetworkPermissionCompat;
 import top.niunaijun.blackbox.fake.service.INetworkManagementServiceProxy;
 import top.niunaijun.blackbox.fake.service.INotificationManagerProxy;
 import top.niunaijun.blackbox.fake.service.IPackageManagerProxy;
+import top.niunaijun.blackbox.fake.service.IPermissionCheckerProxy;
 import top.niunaijun.blackbox.fake.service.IPermissionManagerProxy;
 import top.niunaijun.blackbox.fake.service.IPersistentDataBlockServiceProxy;
 import top.niunaijun.blackbox.fake.service.IPhoneSubInfoProxy;
@@ -182,6 +183,7 @@ public class HookManager {
             if (BuildCompat.isS()) {
                 addInjector(new IActivityClientProxy(null));
                 addInjector(new IVpnManagerProxy());
+                addInjector(new IPermissionCheckerProxy());
             }
             
             if (BuildCompat.isS()) {

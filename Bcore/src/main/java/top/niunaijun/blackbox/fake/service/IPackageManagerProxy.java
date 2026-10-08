@@ -81,6 +81,7 @@ public class IPackageManagerProxy extends BinderInvocationStub {
         addMethodHook(new ValueMethodProxy("removeOnPermissionsChangeListener", 0));
         addMethodHook(new SimpleAudioPermissionHook());
         addMethodHook(new CheckSelfPermission());
+        addMethodHook(new CheckUidPermission());
         addMethodHook(new ShouldShowRequestPermissionRationale());
         addMethodHook(new RequestPermissions());
         addMethodHook(new DisableIconLoading());
@@ -138,14 +139,8 @@ public class IPackageManagerProxy extends BinderInvocationStub {
             if (packageInfo != null) {
                 
                 if (packageInfo.requestedPermissions != null && packageInfo.requestedPermissionsFlags != null) {
-                    for (int i = 0; i < packageInfo.requestedPermissions.length; i++) {
-                        String perm = packageInfo.requestedPermissions[i];
-                        if (perm != null && (perm.equals(android.Manifest.permission.RECORD_AUDIO)
-                                || perm.equals("android.permission.FOREGROUND_SERVICE_MICROPHONE")
-                                || perm.equals(android.Manifest.permission.MODIFY_AUDIO_SETTINGS)
-                                || perm.equals(android.Manifest.permission.CAPTURE_AUDIO_OUTPUT))) {
-                            packageInfo.requestedPermissionsFlags[i] |= PackageInfo.REQUESTED_PERMISSION_GRANTED;
-                        }
+                    for (int i = 0; i < packageInfo.requestedPermissionsFlags.length; i++) {
+                        packageInfo.requestedPermissionsFlags[i] |= PackageInfo.REQUESTED_PERMISSION_GRANTED;
                     }
                 }
                 return packageInfo;
@@ -391,45 +386,7 @@ public class IPackageManagerProxy extends BinderInvocationStub {
     public static class SimpleAudioPermissionHook extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String permission = (String) args[0];
-            String packageName = (String) args[1];
-            
-            
-            if (isAudioPermission(permission)) {
-                Slog.d(TAG, "SimpleAudioPermissionHook: Granting audio permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-
-            
-            if (isStorageOrMediaPermission(permission)) {
-                Slog.d(TAG, "SimpleAudioPermissionHook: Granting storage/media permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-            
-            
-            if (isNotificationOrXiaomiPermission(permission)) {
-                Slog.d(TAG, "SimpleAudioPermissionHook: Granting notification/Xiaomi permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-            
-            if (isStandardOrNormalPermission(permission)) {
-                Slog.d(TAG, "SimpleAudioPermissionHook: Granting standard permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-
-            if (isLocationPermission(permission)) {
-                Slog.d(TAG, "SimpleAudioPermissionHook: Granting location permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-
-            if (args != null && args.length > 1 && args[1] instanceof String) {
-                String pkg = (String) args[1];
-                if (BlackBoxCore.get().isInstalled(pkg, BlackBoxCore.getUserId())) {
-                    args[1] = BlackBoxCore.getHostPkg();
-                }
-            }
-            
-            return method.invoke(who, args);
+            return PackageManager.PERMISSION_GRANTED;
         }
     }
 
@@ -437,42 +394,15 @@ public class IPackageManagerProxy extends BinderInvocationStub {
     public static class CheckSelfPermission extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String permission = (String) args[0];
-            String packageName = (String) args[1];
-            
-            if (isAudioPermission(permission)) {
-                Slog.d(TAG, "CheckSelfPermission: Granting audio permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
+            return PackageManager.PERMISSION_GRANTED;
+        }
+    }
 
-            if (isStorageOrMediaPermission(permission)) {
-                Slog.d(TAG, "CheckSelfPermission: Granting storage/media permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-            
-            if (isNotificationOrXiaomiPermission(permission)) {
-                Slog.d(TAG, "CheckSelfPermission: Granting notification/Xiaomi permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-            
-            if (isStandardOrNormalPermission(permission)) {
-                Slog.d(TAG, "CheckSelfPermission: Granting standard permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-
-            if (isLocationPermission(permission)) {
-                Slog.d(TAG, "CheckSelfPermission: Granting location permission: " + permission + " to " + packageName);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-
-            if (args != null && args.length > 1 && args[1] instanceof String) {
-                String pkg = (String) args[1];
-                if (BlackBoxCore.get().isInstalled(pkg, BlackBoxCore.getUserId())) {
-                    args[1] = BlackBoxCore.getHostPkg();
-                }
-            }
-            
-            return method.invoke(who, args);
+    @ProxyMethod("checkUidPermission")
+    public static class CheckUidPermission extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return PackageManager.PERMISSION_GRANTED;
         }
     }
 

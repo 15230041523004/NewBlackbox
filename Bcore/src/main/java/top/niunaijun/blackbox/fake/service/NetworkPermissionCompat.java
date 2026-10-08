@@ -30,11 +30,55 @@ public class NetworkPermissionCompat implements IInjectHook {
             }
             try {
                 Class<?> permissionManager = Class.forName("android.permission.PermissionManager");
-                Method disablePermissionCache = permissionManager.getDeclaredMethod("disablePermissionCache");
-                disablePermissionCache.setAccessible(true);
-                disablePermissionCache.invoke(null);
+                try {
+                    Method disablePermissionCache = permissionManager.getDeclaredMethod("disablePermissionCache");
+                    disablePermissionCache.setAccessible(true);
+                    disablePermissionCache.invoke(null);
+                    Slog.d(TAG, "disabled framework permission cache via method");
+                } catch (Throwable ignored) {
+                }
+                try {
+                    Method disablePackageCache = permissionManager.getDeclaredMethod("disablePackageNamePermissionCache");
+                    disablePackageCache.setAccessible(true);
+                    disablePackageCache.invoke(null);
+                    Slog.d(TAG, "disabled framework package permission cache via method");
+                } catch (Throwable ignored) {
+                }
+                try {
+                    java.lang.reflect.Field permCacheField = permissionManager.getDeclaredField("sPermissionCache");
+                    permCacheField.setAccessible(true);
+                    Object permCache = permCacheField.get(null);
+                    if (permCache != null) {
+                        try {
+                            Method disableLocal = permCache.getClass().getMethod("disableLocal");
+                            disableLocal.invoke(permCache);
+                            Slog.d(TAG, "disabled sPermissionCache via disableLocal");
+                        } catch (Throwable ignored) {}
+                        try {
+                            Method clear = permCache.getClass().getMethod("clear");
+                            clear.invoke(permCache);
+                        } catch (Throwable ignored) {}
+                    }
+                } catch (Throwable ignored) {
+                }
+                try {
+                    java.lang.reflect.Field pkgCacheField = permissionManager.getDeclaredField("sPackageNamePermissionCache");
+                    pkgCacheField.setAccessible(true);
+                    Object pkgCache = pkgCacheField.get(null);
+                    if (pkgCache != null) {
+                        try {
+                            Method disableLocal = pkgCache.getClass().getMethod("disableLocal");
+                            disableLocal.invoke(pkgCache);
+                            Slog.d(TAG, "disabled sPackageNamePermissionCache via disableLocal");
+                        } catch (Throwable ignored) {}
+                        try {
+                            Method clear = pkgCache.getClass().getMethod("clear");
+                            clear.invoke(pkgCache);
+                        } catch (Throwable ignored) {}
+                    }
+                } catch (Throwable ignored) {
+                }
                 sInstalled = true;
-                Slog.d(TAG, "disabled framework permission cache");
             } catch (Throwable e) {
                 Slog.w(TAG, "install failed: " + e.getMessage(), e);
             }

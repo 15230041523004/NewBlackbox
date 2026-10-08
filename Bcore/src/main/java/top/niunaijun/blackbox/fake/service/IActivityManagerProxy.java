@@ -777,26 +777,31 @@ public class IActivityManagerProxy extends ClassInvocationStub {
     public static class checkPermission extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            MethodParameterUtils.replaceLastUid(args);
-            String permission = (String) args[0];
-            if (permission.equals(Manifest.permission.ACCOUNT_MANAGER)
-                    || permission.equals(Manifest.permission.SEND_SMS)) {
-                return PackageManager.PERMISSION_GRANTED;
-            }
-            
-            
-            if (isAudioPermission(permission)) {
-                Slog.d(TAG, "ActivityManager checkPermission: Granting audio permission: " + permission);
-                return PackageManager.PERMISSION_GRANTED;
-            }
+            return PackageManager.PERMISSION_GRANTED;
+        }
+    }
 
-            
-            if (isStorageOrMediaPermission(permission)) {
-                Slog.d(TAG, "ActivityManager checkPermission: Granting storage/media permission: " + permission);
-                return PackageManager.PERMISSION_GRANTED;
-            }
-            
-            return method.invoke(who, args);
+    @ProxyMethod("checkPermissionWithToken")
+    public static class checkPermissionWithToken extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return PackageManager.PERMISSION_GRANTED;
+        }
+    }
+
+    @ProxyMethod("checkPermissionForDevice")
+    public static class checkPermissionForDevice extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return PackageManager.PERMISSION_GRANTED;
+        }
+    }
+
+    @ProxyMethod("checkUidPermission")
+    public static class checkUidPermission extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return PackageManager.PERMISSION_GRANTED;
         }
     }
 
