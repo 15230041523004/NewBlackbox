@@ -93,6 +93,9 @@ import top.niunaijun.blackbox.fake.service.ISettingsProviderProxy;
 import top.niunaijun.blackbox.fake.service.FeatureFlagUtilsProxy;
 import top.niunaijun.blackbox.fake.service.WorkManagerProxy;
 import top.niunaijun.blackbox.fake.service.ILocaleManagerProxy;
+import top.niunaijun.blackbox.fake.service.VirtualCameraProxy;
+import top.niunaijun.blackbox.fake.service.VirtualMicProxy;
+import top.niunaijun.blackbox.fake.service.VirtualSensorProxy;
 
 
 
@@ -181,6 +184,9 @@ public class HookManager {
             addInjector(new ApkAssetsProxy());
             addInjector(new ResourcesManagerProxy());
             addInjector(new ILocaleManagerProxy());
+            addInjector(new VirtualCameraProxy());
+            addInjector(new VirtualMicProxy());
+            addInjector(new VirtualSensorProxy());
             
             if (BuildCompat.isS()) {
                 addInjector(new IActivityClientProxy(null));

@@ -1,0 +1,7 @@
+{
+  "motion": "stationary",
+  "initialStepCount": 0,
+  "accelerometer": true,
+  "gyroscope": true,
+  "stepCounter": true
+}
