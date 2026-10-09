@@ -2,6 +2,7 @@ package top.niunaijun.blackbox.fake.service;
 
 import android.content.Context;
 import android.net.ConnectivityManager;
+import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
 import android.net.Network;
 import android.net.LinkProperties;
@@ -53,7 +54,10 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         MethodParameterUtils.replaceAllAppPkg(args);
         AttributionSourceUtils.fixAttributionSourceInArgs(args);
         try {
-            return super.invoke(proxy, method, args);
+            boolean guest = GuestNetworkView.isGuest();
+            if (guest) GuestNetworkView.wrapCallbacks(getBase(), args);
+            Object result = super.invoke(proxy, method, args);
+            return guest ? GuestNetworkView.result(getBase(), result) : result;
         } catch (Throwable t) {
             Throwable cause = t;
             if (cause instanceof java.lang.reflect.InvocationTargetException && cause.getCause() != null) {
@@ -154,38 +158,90 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     
     private static Object createNetworkCapabilities() {
         try {
-            
+            Object builder = newCapabilityBuilder(null);
+            builderAddTransport(builder, NetworkCapabilities.TRANSPORT_WIFI);
+            builderAddTransport(builder, NetworkCapabilities.TRANSPORT_CELLULAR);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_TRUSTED);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_NOT_VPN);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED);
+            return buildCapabilities(builder);
+        } catch (Throwable builderError) {
+            Slog.w(TAG, "Capability builder unavailable: " + builderError.getMessage());
+        }
+        try {
             Class<?> networkCapabilitiesClass = Class.forName("android.net.NetworkCapabilities");
             Constructor<?> constructor = networkCapabilitiesClass.getDeclaredConstructor();
             constructor.setAccessible(true);
             Object nc = constructor.newInstance();
-            
-            
-            try {
-                Method addTransportTypeMethod = nc.getClass().getMethod("addTransportType", int.class);
-                addTransportTypeMethod.invoke(nc, android.net.NetworkCapabilities.TRANSPORT_WIFI);
-                addTransportTypeMethod.invoke(nc, android.net.NetworkCapabilities.TRANSPORT_CELLULAR);
-            } catch (Exception e) {
-                Slog.w(TAG, "Could not add transport types: " + e.getMessage());
-            }
-
-            
-            try {
-                Method addCapabilityMethod = nc.getClass().getMethod("addCapability", int.class);
-                addCapabilityMethod.invoke(nc, android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET);
-                addCapabilityMethod.invoke(nc, android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED);
-                addCapabilityMethod.invoke(nc, android.net.NetworkCapabilities.NET_CAPABILITY_TRUSTED);
-                addCapabilityMethod.invoke(nc, android.net.NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED);
-                addCapabilityMethod.invoke(nc, android.net.NetworkCapabilities.NET_CAPABILITY_NOT_VPN);
-                addCapabilityMethod.invoke(nc, android.net.NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED);
-            } catch (Exception e) {
-                Slog.w(TAG, "Could not add capabilities: " + e.getMessage());
-            }
-            
+            addHiddenCapabilities(nc,
+                    NetworkCapabilities.NET_CAPABILITY_INTERNET,
+                    NetworkCapabilities.NET_CAPABILITY_VALIDATED,
+                    NetworkCapabilities.NET_CAPABILITY_TRUSTED,
+                    NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED,
+                    NetworkCapabilities.NET_CAPABILITY_NOT_VPN,
+                    NetworkCapabilities.NET_CAPABILITY_NOT_CONGESTED);
             return nc;
         } catch (Exception e) {
-            Slog.w(TAG, "Failed to create NetworkCapabilities via reflection: " + e.getMessage());
+            Slog.w(TAG, "Failed to create NetworkCapabilities: " + e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * {@code NetworkCapabilities.addCapability} is a hidden API. Android 16
+     * rejects the reflective call. {@code NetworkCapabilities.Builder} is public
+     * since API 31 and is loaded by name because the engine stub does not export it.
+     */
+    static Object markValidatedInternet(Object capabilities) {
+        if (!(capabilities instanceof NetworkCapabilities)) {
+            return capabilities;
+        }
+        try {
+            Object builder = newCapabilityBuilder(capabilities);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_INTERNET);
+            builderAddCapability(builder, NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+            return buildCapabilities(builder);
+        } catch (Throwable t) {
+            Slog.w(TAG, "Could not mark network validated: " + t.getMessage());
+            addHiddenCapabilities(capabilities,
+                    NetworkCapabilities.NET_CAPABILITY_INTERNET,
+                    NetworkCapabilities.NET_CAPABILITY_VALIDATED);
+            return capabilities;
+        }
+    }
+
+    private static Object newCapabilityBuilder(Object existing) throws Exception {
+        Class<?> builderClass = Class.forName("android.net.NetworkCapabilities$Builder");
+        if (existing == null) {
+            return builderClass.getConstructor().newInstance();
+        }
+        return builderClass.getConstructor(NetworkCapabilities.class).newInstance(existing);
+    }
+
+    private static void builderAddCapability(Object builder, int capability) throws Exception {
+        builder.getClass().getMethod("addCapability", int.class).invoke(builder, capability);
+    }
+
+    private static void builderAddTransport(Object builder, int transport) throws Exception {
+        builder.getClass().getMethod("addTransportType", int.class).invoke(builder, transport);
+    }
+
+    private static Object buildCapabilities(Object builder) throws Exception {
+        return builder.getClass().getMethod("build").invoke(builder);
+    }
+
+    private static void addHiddenCapabilities(Object capabilities, int... values) {
+        try {
+            Method addCapabilityMethod = capabilities.getClass().getDeclaredMethod("addCapability", int.class);
+            addCapabilityMethod.setAccessible(true);
+            for (int value : values) {
+                addCapabilityMethod.invoke(capabilities, value);
+            }
+        } catch (Throwable t) {
+            Slog.w(TAG, "Could not add capabilities: " + t.getMessage());
         }
     }
 
@@ -370,17 +426,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
                     
                     Object result = method.invoke(who, args);
                     if (result != null) {
-                        
-                        try {
-                            Method addCapabilityMethod = result.getClass().getMethod("addCapability", int.class);
-                            addCapabilityMethod.setAccessible(true);
-                            addCapabilityMethod.invoke(result, 12); 
-                            addCapabilityMethod.invoke(result, 16); 
-                        } catch (Exception e) {
-                             
-                            e.printStackTrace();
-                        }
-                        return result;
+                        return markValidatedInternet(result);
                     }
 
                     

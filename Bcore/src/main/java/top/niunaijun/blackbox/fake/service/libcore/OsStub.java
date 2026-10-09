@@ -56,7 +56,20 @@ public class OsStub extends ClassInvocationStub {
                 }
             }
         }
-        return super.invoke(proxy, method, args);
+        Object result = super.invoke(proxy, method, args);
+        if ("getifaddrs".equals(method.getName()) && result != null
+                && top.niunaijun.blackbox.fake.service.GuestNetworkView.isGuest()) {
+            java.util.ArrayList<Object> visible = new java.util.ArrayList<>();
+            for (int i = 0; i < java.lang.reflect.Array.getLength(result); i++) {
+                Object address = java.lang.reflect.Array.get(result, i);
+                String name = (String) address.getClass().getField("ifa_name").get(address);
+                if (!top.niunaijun.blackbox.fake.service.GuestNetworkView.isTunnel(name)) visible.add(address);
+            }
+            Object copy = java.lang.reflect.Array.newInstance(result.getClass().getComponentType(), visible.size());
+            for (int i = 0; i < visible.size(); i++) java.lang.reflect.Array.set(copy, i, visible.get(i));
+            return copy;
+        }
+        return result;
     }
 
     @ProxyMethod("getuid")

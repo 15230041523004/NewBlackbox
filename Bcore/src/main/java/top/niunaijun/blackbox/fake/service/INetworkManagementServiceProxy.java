@@ -44,6 +44,17 @@ public class INetworkManagementServiceProxy extends BinderInvocationStub {
         addMethodHook(new UidMethodProxy("setUidMeteredNetworkWhitelist", 0));
     }
 
+    @ProxyMethod("listInterfaces")
+    public static class VisibleInterfaces extends MethodHook {
+        @Override protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            String[] result = (String[]) method.invoke(who, args);
+            if (result == null || !GuestNetworkView.isGuest()) return result;
+            java.util.ArrayList<String> visible = new java.util.ArrayList<>();
+            for (String name : result) if (!GuestNetworkView.isTunnel(name)) visible.add(name);
+            return visible.toArray(new String[0]);
+        }
+    }
+
     @ProxyMethod("getNetworkStatsUidDetail")
     public static class getNetworkStatsUidDetail extends MethodHook {
         @Override

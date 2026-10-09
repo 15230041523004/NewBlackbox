@@ -461,6 +461,11 @@ public class BActivityThread extends IBActivityThread.Stub {
 
         NativeCore.init(Build.VERSION.SDK_INT);
         try {
+            top.niunaijun.blackbox.fake.service.GuestNetworkHooks.install();
+        } catch (Throwable networkHookError) {
+            Slog.w(TAG, "Guest network hooks were not installed: " + networkHookError.getMessage());
+        }
+        try {
             top.niunaijun.blackbox.fake.service.SpoofHookInstaller.install();
         } catch (Throwable spoofHookError) {
             Slog.w(TAG, "Spoof hooks were not installed: " + spoofHookError.getMessage());

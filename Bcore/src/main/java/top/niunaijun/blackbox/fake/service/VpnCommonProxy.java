@@ -9,11 +9,27 @@ import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
+import top.niunaijun.blackbox.fake.hook.ProxyMethods;
 import top.niunaijun.blackbox.proxy.ProxyVpnService;
 import top.niunaijun.blackbox.utils.MethodParameterUtils;
 
 
 public class VpnCommonProxy {
+    @ProxyMethods({"getVpnConfig", "getLegacyVpnInfo", "getVpnInfo", "getVpnProfileState",
+            "getProvisionedVpnProfileState", "getAlwaysOnVpnPackage"})
+    public static class HiddenVpnState extends MethodHook {
+        @Override protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return GuestNetworkView.isGuest() ? null : method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethods({"isVpnLockdownEnabled", "isAlwaysOnVpnLockdownEnabled"})
+    public static class HiddenVpnLockdown extends MethodHook {
+        @Override protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return GuestNetworkView.isGuest() ? false : method.invoke(who, args);
+        }
+    }
+
     @ProxyMethod("setVpnPackageAuthorization")
     public static class setVpnPackageAuthorization extends MethodHook {
 
