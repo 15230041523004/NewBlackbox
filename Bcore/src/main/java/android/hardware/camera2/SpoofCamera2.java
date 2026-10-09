@@ -18,6 +18,7 @@ import android.media.ImageWriter;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
+import android.util.Size;
 import android.util.ArrayMap;
 import android.util.ArraySet;
 import android.view.Surface;
@@ -57,6 +58,7 @@ public final class SpoofCamera2 {
     private static Method openWithHandler;
     private static Method openWithExecutor;
     private static Method openAsyncBackup;
+    private static Method surfaceSizeQuery;
     private static Handler pumpHandler;
     private static boolean pumping;
     private static final AtomicInteger SEQUENCES = new AtomicInteger();
@@ -199,6 +201,13 @@ public final class SpoofCamera2 {
             // A camera switch can reuse the consumer texture with a new Surface
             // wrapper. Disconnect the old EGL producer before reconnecting it.
             VIDEO.retainOutputs(outputs);
+            for (Surface surface : new ArrayList<>(WRITERS.keySet())) {
+                if (surface.isValid()) continue;
+                ImageWriter writer = WRITERS.remove(surface);
+                if (writer != null) {
+                    try { writer.close(); } catch (Throwable ignored) {}
+                }
+            }
             boolean active = false;
             if (spoof && !sessions.isEmpty()) {
                 VIDEO.beginFrame(VirtualResourceManager.getCameraFile(pkg, "record.mp4"), pump());
@@ -247,6 +256,25 @@ public final class SpoofCamera2 {
 
     static boolean isPreviewSurface(Surface surface) {
         return surface != null && surface.isValid() && surfaceFormat(surface) == ImageFormat.PRIVATE;
+    }
+
+    /** Current buffer size of a camera output. Zero when the consumer has not chosen one. */
+    static int[] surfaceSize(Surface surface) {
+        if (surface == null || !surface.isValid()) return null;
+        try {
+            Method query = surfaceSizeQuery;
+            if (query == null) {
+                Class<?> utils = Class.forName("android.hardware.camera2.utils.SurfaceUtils");
+                query = utils.getDeclaredMethod("getSurfaceSize", Surface.class);
+                query.setAccessible(true);
+                surfaceSizeQuery = query;
+            }
+            Size size = (Size) query.invoke(null, surface);
+            if (size == null || size.getWidth() <= 0 || size.getHeight() <= 0) return null;
+            return new int[]{size.getWidth(), size.getHeight()};
+        } catch (Throwable error) {
+            return null;
+        }
     }
 
     private static boolean drawSurface(Surface surface, Bitmap bitmap, byte[] jpeg, long timestamp) {
@@ -896,14 +924,30 @@ public final class SpoofCamera2 {
                                final Handler handler, final Executor executor) throws CameraAccessException {
             if (closed) throw new IllegalStateException("camera closed");
             final SpoofSession session = new SpoofSession(this, outputs);
+            session.stateCallback = callback;
+            session.stateHandler = handler;
+            session.stateExecutor = executor;
+            List<SpoofSession> replaced = new ArrayList<>();
             synchronized (SESSIONS) {
+                // Rotation reconfigures the session in place. Camera2 closes the
+                // previous one itself; leaving it repeating feeds a surface the
+                // guest is already releasing.
+                for (int i = SESSIONS.size() - 1; i >= 0; i--) {
+                    SpoofSession existing = SESSIONS.get(i);
+                    if (existing.device == this && existing.supersede()) {
+                        SESSIONS.remove(i);
+                        replaced.add(existing);
+                    }
+                }
                 SESSIONS.add(session);
             }
             startPump();
+            for (SpoofSession old : replaced) old.dispatchClosed();
             if (callback == null) return;
             post(executor, handler, new Runnable() {
                 @Override
                 public void run() {
+                    if (session.closed) return;
                     try {
                         callback.onConfigured(session);
                     } catch (Throwable t) {
@@ -933,6 +977,10 @@ public final class SpoofCamera2 {
         private volatile Executor repeatingExecutor;
         private volatile int repeatingSequence;
         private volatile boolean closed;
+        private boolean closedCallbackSent;
+        private CameraCaptureSession.StateCallback stateCallback;
+        private Handler stateHandler;
+        private Executor stateExecutor;
         private static boolean loggedResult;
 
         SpoofSession(SpoofDevice device, List<Surface> outputs) {
@@ -947,6 +995,31 @@ public final class SpoofCamera2 {
             // Configured still outputs must stay empty until a request targets
             // them. MAX configures its JPEG reader when the paperclip opens.
             return repeating && !closed ? surfacesOf(repeatingRequest) : Collections.emptyList();
+        }
+
+        /** Drops this session because the device configured another one. */
+        boolean supersede() {
+            if (closed) return false;
+            closed = true;
+            repeating = false;
+            return true;
+        }
+
+        void dispatchClosed() {
+            if (closedCallbackSent) return;
+            closedCallbackSent = true;
+            final CameraCaptureSession.StateCallback callback = stateCallback;
+            if (callback == null) return;
+            post(stateExecutor, stateHandler, new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        callback.onClosed(SpoofSession.this);
+                    } catch (Throwable t) {
+                        Slog.w(TAG, "onClosed: " + t.getMessage());
+                    }
+                }
+            });
         }
 
         void fireRepeating() {

@@ -39,7 +39,7 @@ final class SpoofVideoRenderer {
     private EGLContext context = EGL14.EGL_NO_CONTEXT;
     private EGLConfig config;
     private EGLSurface pbuffer;
-    private final Map<Surface, EGLSurface> windows = new HashMap<>();
+    private final Map<Surface, Output> windows = new HashMap<>();
     private final FloatBuffer vertices = ByteBuffer.allocateDirect(16 * 4)
             .order(ByteOrder.nativeOrder()).asFloatBuffer();
     private final float[] transform = new float[16];
@@ -167,19 +167,37 @@ final class SpoofVideoRenderer {
     boolean draw(Surface surface, Bitmap fallback) {
         if (!SpoofCamera2.isPreviewSurface(surface)) return false;
         if (context == EGL14.EGL_NO_CONTEXT) initGl();
-        EGLSurface window = windows.get(surface);
-        if (window == null) {
-            window = EGL14.eglCreateWindowSurface(display, config, surface,
+        int[] size = SpoofCamera2.surfaceSize(surface);
+        Output output = windows.get(surface);
+        if (output != null && size != null && (output.width != size[0] || output.height != size[1])) {
+            // Rotation keeps this Surface and only changes its buffer size.
+            // Swapping the old EGL window into the resized queue aborts the driver.
+            releaseWindow(surface);
+            output = null;
+        }
+        if (output == null) {
+            // A current window defers its disconnection. Bind the pbuffer before
+            // the replacement connects, or the consumer stays exclusively owned.
+            EGL14.eglMakeCurrent(display, pbuffer, pbuffer, context);
+            EGLSurface window = EGL14.eglCreateWindowSurface(display, config, surface,
                     new int[]{EGL14.EGL_NONE}, 0);
             if (window == null || window == EGL14.EGL_NO_SURFACE) return false;
-            windows.put(surface, window);
-            Slog.i(TAG, "video output surface connected " + surface);
+            output = new Output(window, size == null ? 0 : size[0], size == null ? 0 : size[1]);
+            windows.put(surface, output);
+            Slog.i(TAG, "video output surface connected " + output.width + "x" + output.height + " " + surface);
         }
-        if (!EGL14.eglMakeCurrent(display, window, window, context)) return false;
+        if (!surface.isValid() || !EGL14.eglMakeCurrent(display, output.window, output.window, context)) {
+            releaseWindow(surface);
+            return false;
+        }
         int[] width = new int[1];
         int[] height = new int[1];
-        EGL14.eglQuerySurface(display, window, EGL14.EGL_WIDTH, width, 0);
-        EGL14.eglQuerySurface(display, window, EGL14.EGL_HEIGHT, height, 0);
+        EGL14.eglQuerySurface(display, output.window, EGL14.EGL_WIDTH, width, 0);
+        EGL14.eglQuerySurface(display, output.window, EGL14.EGL_HEIGHT, height, 0);
+        if (width[0] <= 0 || height[0] <= 0) {
+            releaseWindow(surface);
+            return false;
+        }
         GLES20.glViewport(0, 0, width[0], height[0]);
         GLES20.glClearColor(0f, 0f, 0f, 1f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
@@ -211,8 +229,25 @@ final class SpoofVideoRenderer {
             GLES20.glEnableVertexAttribArray(1);
             GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
         }
-        EGLExt.eglPresentationTimeANDROID(display, window, System.nanoTime());
-        return EGL14.eglSwapBuffers(display, window) && GLES20.glGetError() == GLES20.GL_NO_ERROR;
+        if (!surface.isValid()) {
+            releaseWindow(surface);
+            return false;
+        }
+        EGLExt.eglPresentationTimeANDROID(display, output.window, System.nanoTime());
+        if (!EGL14.eglSwapBuffers(display, output.window)) {
+            releaseWindow(surface);
+            return false;
+        }
+        return GLES20.glGetError() == GLES20.GL_NO_ERROR;
+    }
+
+    private void releaseWindow(Surface surface) {
+        Output output = windows.remove(surface);
+        if (output == null) return;
+        // Same order as a camera switch: leave the pbuffer current so this
+        // consumer can accept another producer without restarting playback.
+        EGL14.eglMakeCurrent(display, pbuffer, pbuffer, context);
+        EGL14.eglDestroySurface(display, output.window);
     }
 
     void retainOutputs(Collection<Surface> outputs) {
@@ -221,11 +256,11 @@ final class SpoofVideoRenderer {
         // the pbuffer first so the same consumer can immediately accept a new
         // Surface wrapper, without restarting the player or its audio clock.
         EGL14.eglMakeCurrent(display, pbuffer, pbuffer, context);
-        Iterator<Map.Entry<Surface, EGLSurface>> iterator = windows.entrySet().iterator();
+        Iterator<Map.Entry<Surface, Output>> iterator = windows.entrySet().iterator();
         while (iterator.hasNext()) {
-            Map.Entry<Surface, EGLSurface> entry = iterator.next();
+            Map.Entry<Surface, Output> entry = iterator.next();
             if (!entry.getKey().isValid() || !outputs.contains(entry.getKey())) {
-                EGL14.eglDestroySurface(display, entry.getValue());
+                EGL14.eglDestroySurface(display, entry.getValue().window);
                 iterator.remove();
             }
         }
@@ -306,7 +341,7 @@ final class SpoofVideoRenderer {
         if (decoderTexture != null) { decoderTexture.release(); decoderTexture = null; }
         if (display != EGL14.EGL_NO_DISPLAY) {
             EGL14.eglMakeCurrent(display, pbuffer, pbuffer, context);
-            for (EGLSurface window : windows.values()) EGL14.eglDestroySurface(display, window);
+            for (Output output : windows.values()) EGL14.eglDestroySurface(display, output.window);
         }
         windows.clear();
         key = "";
@@ -381,6 +416,18 @@ final class SpoofVideoRenderer {
         GLES20.glGetProgramiv(result, GLES20.GL_LINK_STATUS, status, 0);
         if (status[0] == 0) throw new IllegalStateException(GLES20.glGetProgramInfoLog(result));
         return result;
+    }
+
+    private static final class Output {
+        final EGLSurface window;
+        final int width;
+        final int height;
+
+        Output(EGLSurface window, int width, int height) {
+            this.window = window;
+            this.width = width;
+            this.height = height;
+        }
     }
 
     private static int shader(int type, String source) {
