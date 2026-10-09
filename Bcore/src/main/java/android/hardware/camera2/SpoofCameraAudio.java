@@ -6,6 +6,7 @@ import android.media.AudioTimestamp;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.media.MediaRecorder;
 import android.os.SystemClock;
 
 import java.io.File;
@@ -23,21 +24,35 @@ import top.niunaijun.blackbox.utils.AppSpoofConfig;
 import top.niunaijun.blackbox.utils.Slog;
 import top.niunaijun.blackbox.utils.VirtualResourceManager;
 
-/** Audio timing and source selection for a virtual Camera2 recording only. */
+/** Audio timing and source selection for virtual camera recordings and VoIP calls. */
 public final class SpoofCameraAudio {
     private static final Map<Object, Stream> STREAMS = Collections.synchronizedMap(new WeakHashMap<>());
+    private static final Map<Object, Boolean> CALLS = Collections.synchronizedMap(new WeakHashMap<>());
 
     public static boolean start(Object receiver) {
         if (android.os.Build.VERSION.SDK_INT < 28) return false;
-        if (!(receiver instanceof AudioRecord) || !SpoofCamera2.hasActiveSession()) return false;
+        if (!(receiver instanceof AudioRecord)) return false;
         String pkg = VirtualResourceManager.currentPackage();
         AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
-        if (!config.cameraAudioFromVideo && config.grantMic) return false;
-        AudioRecord record = (AudioRecord) receiver;
-        stop(receiver);
+        return start((AudioRecord) receiver, pkg, config);
+    }
+
+    private static boolean start(AudioRecord record, String pkg, AppSpoofConfig config) {
+        boolean call = record.getAudioSource() == MediaRecorder.AudioSource.VOICE_COMMUNICATION;
+        boolean camera = SpoofCamera2.hasActiveSession();
+        // MAX starts VoIP capture before opening its camera. Waiting for an active
+        // camera leaves the call on the unpaced voice-message PCM path.
+        if (!call && !camera) return false;
+        stop(record);
+        // Track the call even when the real microphone is allowed, so camera
+        // geometry does not depend on which audio source the user selected.
+        if (call) CALLS.put(record, Boolean.TRUE);
+        boolean video = config.cameraAudioFromVideo && !config.grantCamera;
+        if (!video && config.grantMic) return false;
         Stream stream = new Stream(record.getSampleRate(), record.getChannelCount());
-        STREAMS.put(receiver, stream);
-        if (config.cameraAudioFromVideo) {
+        stream.call = call;
+        STREAMS.put(record, stream);
+        if (video) {
             File file = VirtualResourceManager.getCameraFile(pkg, "record.mp4");
             stream.startVideo(file, SpoofCamera2.videoPositionMs() * 1000L);
         } else {
@@ -49,16 +64,34 @@ public final class SpoofCameraAudio {
             }
             stream.ended = true;
         }
-        Slog.i("SpoofCamera2", "circle audio source=" + (config.cameraAudioFromVideo ? "video" : "microphone")
-                + " " + stream.rate + "Hz x" + stream.channels);
+        Slog.i("SpoofCamera2", (call ? "call" : "circle") + " audio source="
+                + (video ? "video" : "microphone") + " " + stream.rate + "Hz x" + stream.channels
+                + " encoding=" + record.getAudioFormat() + " cameraActive=" + camera);
         return true;
     }
 
     public static boolean active(Object receiver) { return STREAMS.containsKey(receiver); }
+    public static boolean hasActiveCall() { return !CALLS.isEmpty(); }
+
+    /** Position actually supplied to a call, also when its camera has not opened yet. */
+    public static long callVideoPositionMs(File file) {
+        if (file == null) return -1;
+        String path = file.getAbsolutePath();
+        Stream latest = null;
+        synchronized (STREAMS) {
+            for (Stream stream : STREAMS.values()) {
+                if (stream.running && stream.call && path.equals(stream.videoPath)
+                        && (latest == null || stream.start > latest.start)) latest = stream;
+            }
+        }
+        if (latest == null) return -1;
+        return latest.videoStartUs / 1000L + latest.bytesRead * 1000L / (2L * latest.channels * latest.rate);
+    }
 
     public static int read(Object receiver, ByteBuffer output, int size) {
         Stream stream = STREAMS.get(receiver);
         if (stream == null) return -1;
+        if (output == null) return AudioRecord.ERROR_BAD_VALUE;
         int count = Math.min(size, output.capacity());
         if (count <= 0) return 0;
         byte[] bytes = new byte[count];
@@ -67,6 +100,28 @@ public final class SpoofCameraAudio {
         view.clear();
         view.put(bytes);
         return count;
+    }
+
+    public static int read(Object receiver, byte[] output, int offset, int size) {
+        Stream stream = STREAMS.get(receiver);
+        if (stream == null) return -1;
+        if (output == null || offset < 0 || size < 0 || offset > output.length - size)
+            return AudioRecord.ERROR_BAD_VALUE;
+        byte[] bytes = new byte[size];
+        stream.read(bytes);
+        System.arraycopy(bytes, 0, output, offset, size);
+        return size;
+    }
+
+    public static int read(Object receiver, short[] output, int offset, int size) {
+        Stream stream = STREAMS.get(receiver);
+        if (stream == null) return -1;
+        if (output == null || offset < 0 || size < 0 || offset > output.length - size)
+            return AudioRecord.ERROR_BAD_VALUE;
+        byte[] bytes = new byte[size * 2];
+        stream.read(bytes);
+        ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(output, offset, size);
+        return size;
     }
 
     public static int timestamp(Object receiver, AudioTimestamp timestamp, int timebase) {
@@ -79,6 +134,7 @@ public final class SpoofCameraAudio {
     }
 
     public static void stop(Object receiver) {
+        CALLS.remove(receiver);
         Stream stream = STREAMS.remove(receiver);
         if (stream != null) {
             stream.running = false;
@@ -95,6 +151,9 @@ public final class SpoofCameraAudio {
         volatile boolean running = true;
         volatile boolean ended;
         volatile long bytesRead;
+        boolean call;
+        volatile String videoPath;
+        volatile long videoStartUs;
         Thread worker;
         byte[] loop;
         byte[] chunk;
@@ -141,6 +200,8 @@ public final class SpoofCameraAudio {
 
         void startVideo(File file, long positionUs) {
             if (file == null) { ended = true; return; }
+            videoPath = file.getAbsolutePath();
+            videoStartUs = positionUs;
             worker = new Thread(() -> decode(file, positionUs), "spoof-circle-audio");
             worker.start();
         }

@@ -684,23 +684,27 @@ final class SpoofBridges {
     }
 
     static int onReadBytes(Object self, byte[] buf, int off, int size) throws Throwable {
+        if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadBytes == null) return asInt(bReadBytes, self, buf, off, size);
         VirtualMicProxy.ensurePcm();
         return VirtualMicProxy.fillBufferStatic(buf, off, size);
     }
 
     static int onReadBytesMode(Object self, byte[] buf, int off, int size, int mode) throws Throwable {
+        if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadBytesMode == null) return asInt(bReadBytesMode, self, buf, off, size, mode);
         return onReadBytes(self, buf, off, size);
     }
 
     static int onReadShorts(Object self, short[] buf, int off, int size) throws Throwable {
+        if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadShorts == null) return asInt(bReadShorts, self, buf, off, size);
         VirtualMicProxy.ensurePcm();
         return VirtualMicProxy.fillShorts(buf, off, size);
     }
 
     static int onReadShortsMode(Object self, short[] buf, int off, int size, int mode) throws Throwable {
+        if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadShortsMode == null) return asInt(bReadShortsMode, self, buf, off, size, mode);
         return onReadShorts(self, buf, off, size);
     }

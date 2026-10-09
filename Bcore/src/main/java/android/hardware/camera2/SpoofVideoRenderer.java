@@ -1,6 +1,8 @@
 package android.hardware.camera2;
 
 import android.graphics.Bitmap;
+import android.graphics.Point;
+import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.media.MediaPlayer;
 import android.opengl.EGL14;
@@ -14,6 +16,7 @@ import android.opengl.GLES20;
 import android.opengl.GLUtils;
 import android.os.Handler;
 import android.view.Surface;
+import android.view.WindowManager;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -21,9 +24,12 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.HashMap;
+import java.util.Collection;
+import java.util.Iterator;
 import java.util.Map;
 
 import top.niunaijun.blackbox.utils.Slog;
+import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.utils.VirtualResourceManager;
 
 /** All GL and player operations run on the spoof-camera handler. */
@@ -51,6 +57,11 @@ final class SpoofVideoRenderer {
     private boolean haveFrame;
     private boolean failed;
     private boolean loggedFrame;
+    private boolean ready;
+    private boolean seeking;
+    private long lastSyncCheck;
+    private File videoFile;
+    private String geometryKey = "";
     private Bitmap uploadedPhoto;
 
     int positionMs() {
@@ -60,13 +71,14 @@ final class SpoofVideoRenderer {
 
     boolean beginFrame(File file, Handler handler) {
         if (file == null) {
-            stop();
+            if (player != null || !key.isEmpty()) stop();
             return false;
         }
         String nextKey = file.getAbsolutePath() + ":" + file.lastModified() + ":" + file.length();
         if (!nextKey.equals(key)) {
             stop();
             key = nextKey;
+            videoFile = file;
             try {
                 initGl();
                 GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, videoTexture);
@@ -83,10 +95,20 @@ final class SpoofVideoRenderer {
                 player.setVolume(0f, 0f);
                 player.setLooping(true);
                 player.setOnPreparedListener(prepared -> {
+                    if (prepared != player) return;
                     videoWidth = prepared.getVideoWidth();
                     videoHeight = prepared.getVideoHeight();
-                    prepared.start();
-                    Slog.i(TAG, "video playback started " + videoWidth + "x" + videoHeight);
+                    ready = true;
+                    if (!syncCall(true)) startPlayer();
+                });
+                player.setOnSeekCompleteListener(prepared -> {
+                    if (prepared != player) return;
+                    seeking = false;
+                    startPlayer();
+                    long audio = SpoofCameraAudio.callVideoPositionMs(videoFile);
+                    int duration = prepared.getDuration();
+                    if (audio >= 0 && duration > 0) Slog.i(TAG, "call video synced audio="
+                            + audio % duration + "ms video=" + prepared.getCurrentPosition() + "ms");
                 });
                 player.setOnErrorListener((source, what, extra) -> {
                     failed = true;
@@ -102,7 +124,8 @@ final class SpoofVideoRenderer {
         }
         if (context == EGL14.EGL_NO_CONTEXT || pbuffer == null || pbuffer == EGL14.EGL_NO_SURFACE) return false;
         if (!EGL14.eglMakeCurrent(display, pbuffer, pbuffer, context)) return false;
-        if (!failed && pendingFrame) {
+        if (ready && !failed && !seeking) syncCall(false);
+        if (!failed && pendingFrame && !seeking) {
             pendingFrame = false;
             decoderTexture.updateTexImage();
             decoderTexture.getTransformMatrix(transform);
@@ -115,8 +138,35 @@ final class SpoofVideoRenderer {
         return true;
     }
 
+    private void startPlayer() {
+        player.start();
+        Slog.i(TAG, "video playback started " + videoWidth + "x" + videoHeight
+                + " position=" + player.getCurrentPosition() + "ms");
+    }
+
+    private boolean syncCall(boolean starting) {
+        long now = System.nanoTime();
+        if (seeking || (!starting && now - lastSyncCheck < 2000000000L)) return seeking;
+        lastSyncCheck = now;
+        long audio = SpoofCameraAudio.callVideoPositionMs(videoFile);
+        int duration = player.getDuration();
+        if (audio < 0 || duration <= 0) return false;
+        int target = (int) (audio % duration);
+        int position = player.getCurrentPosition();
+        int drift = target - position;
+        // Use the shorter distance across the loop boundary.
+        if (drift > duration / 2) drift -= duration;
+        if (drift < -duration / 2) drift += duration;
+        if (Math.abs(drift) <= 200) return false;
+        seeking = true;
+        Slog.i(TAG, "call video sync audio=" + target + "ms video=" + position + "ms drift=" + drift + "ms");
+        player.seekTo(target, MediaPlayer.SEEK_CLOSEST);
+        return true;
+    }
+
     boolean draw(Surface surface, Bitmap fallback) {
         if (!SpoofCamera2.isPreviewSurface(surface)) return false;
+        if (context == EGL14.EGL_NO_CONTEXT) initGl();
         EGLSurface window = windows.get(surface);
         if (window == null) {
             window = EGL14.eglCreateWindowSurface(display, config, surface,
@@ -165,22 +215,89 @@ final class SpoofVideoRenderer {
         return EGL14.eglSwapBuffers(display, window) && GLES20.glGetError() == GLES20.GL_NO_ERROR;
     }
 
+    void retainOutputs(Collection<Surface> outputs) {
+        if (windows.isEmpty()) return;
+        // Destroying the current window merely defers its disconnection. Bind
+        // the pbuffer first so the same consumer can immediately accept a new
+        // Surface wrapper, without restarting the player or its audio clock.
+        EGL14.eglMakeCurrent(display, pbuffer, pbuffer, context);
+        Iterator<Map.Entry<Surface, EGLSurface>> iterator = windows.entrySet().iterator();
+        while (iterator.hasNext()) {
+            Map.Entry<Surface, EGLSurface> entry = iterator.next();
+            if (!entry.getKey().isValid() || !outputs.contains(entry.getKey())) {
+                EGL14.eglDestroySurface(display, entry.getValue());
+                iterator.remove();
+            }
+        }
+    }
+
     private void setVertices(int sourceWidth, int sourceHeight, int width, int height, boolean flipY) {
+        String pkg = VirtualResourceManager.currentPackage();
+        boolean call = SpoofCameraAudio.hasActiveCall();
+        float targetAspect = (float) width / Math.max(1, height);
+        float frameAspect = targetAspect;
+        if ("ru.oneme.app".equals(pkg)) {
+            // The call first rotates the camera frame and then center-crops it
+            // to the view. Place the complete replacement inside the part of
+            // the frame that survives that crop. Circles retain their square mapping.
+            targetAspect = call ? displayAspect(width, height) : 1f;
+            frameAspect = call ? callFrameAspect(width, height) : targetAspect;
+        }
+        boolean fill = VirtualResourceManager.getSpoofConfig(pkg).cameraFillFrame;
+        String geometry = sourceWidth + "x" + sourceHeight + ":" + width + "x" + height
+                + ":" + targetAspect + ":" + frameAspect + ":" + call + ":" + fill;
+        if (!geometry.equals(geometryKey)) {
+            geometryKey = geometry;
+            Slog.i(TAG, "video geometry source=" + sourceWidth + "x" + sourceHeight
+                    + " input=" + width + "x" + height + " displayAspect=" + targetAspect
+                    + " frameAspect=" + frameAspect
+                    + " call=" + call + " scale=" + (fill ? "fill" : "fit"));
+        }
+        setVertices(sourceWidth, sourceHeight, flipY, fill, targetAspect, frameAspect);
+    }
+
+    private static float callFrameAspect(int width, int height) {
+        int deviceRotation = 0;
+        try {
+            WindowManager manager = (WindowManager) BlackBoxCore.getContext().getSystemService(Context.WINDOW_SERVICE);
+            deviceRotation = manager.getDefaultDisplay().getRotation() * 90;
+        } catch (Throwable ignored) {}
+        if (!SpoofCamera2.frontFacing()) deviceRotation = 360 - deviceRotation;
+        boolean rotated = (SpoofCamera2.sensorOrientation() + deviceRotation) % 180 != 0;
+        return rotated ? (float) height / Math.max(1, width) : (float) width / Math.max(1, height);
+    }
+
+    private static float displayAspect(int width, int height) {
+        try {
+            WindowManager manager = (WindowManager) BlackBoxCore.getContext().getSystemService(Context.WINDOW_SERVICE);
+            Point size = new Point();
+            manager.getDefaultDisplay().getRealSize(size);
+            if (size.x > 0 && size.y > 0) return (float) size.x / size.y;
+        } catch (Throwable ignored) {}
+        return (float) width / Math.max(1, height);
+    }
+
+    private void setVertices(int sourceWidth, int sourceHeight, boolean flipY, boolean fill, float targetAspect) {
+        setVertices(sourceWidth, sourceHeight, flipY, fill, targetAspect, targetAspect);
+    }
+
+    private void setVertices(int sourceWidth, int sourceHeight, boolean flipY, boolean fill,
+                             float targetAspect, float frameAspect) {
         float sourceAspect = (float) sourceWidth / sourceHeight;
-        // MAX's circle effect maps this CameraPipe input to a square. Compose
-        // a square crop before that transform, which otherwise squeezes 4:3.
-        float targetAspect = "ru.oneme.app".equals(VirtualResourceManager.currentPackage())
-                ? 1f : (float) width / Math.max(1, height);
-        float x = sourceAspect > targetAspect ? targetAspect / sourceAspect : 1f;
-        float y = sourceAspect < targetAspect ? sourceAspect / targetAspect : 1f;
+        float x = fill && sourceAspect > targetAspect ? targetAspect / sourceAspect : 1f;
+        float y = fill && sourceAspect < targetAspect ? sourceAspect / targetAspect : 1f;
+        float quadX = !fill && sourceAspect < targetAspect ? sourceAspect / targetAspect : 1f;
+        float quadY = !fill && sourceAspect > targetAspect ? targetAspect / sourceAspect : 1f;
+        quadX *= Math.min(1f, targetAspect / frameAspect);
+        quadY *= Math.min(1f, frameAspect / targetAspect);
         float left = (1f - x) / 2f;
         float right = 1f - left;
         float bottom = (1f - y) / 2f;
         float top = 1f - bottom;
         if (flipY) { float swap = bottom; bottom = top; top = swap; }
         vertices.clear();
-        vertices.put(new float[]{-1f, -1f, left, bottom, 1f, -1f, right, bottom,
-                -1f, 1f, left, top, 1f, 1f, right, top}).position(0);
+        vertices.put(new float[]{-quadX, -quadY, left, bottom, quadX, -quadY, right, bottom,
+                -quadX, quadY, left, top, quadX, quadY, right, top}).position(0);
     }
 
     void stop() {
@@ -197,6 +314,11 @@ final class SpoofVideoRenderer {
         haveFrame = false;
         failed = false;
         loggedFrame = false;
+        ready = false;
+        seeking = false;
+        lastSyncCheck = 0;
+        videoFile = null;
+        geometryKey = "";
         uploadedPhoto = null;
     }
 

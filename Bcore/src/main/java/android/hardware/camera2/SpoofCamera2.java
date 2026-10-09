@@ -15,14 +15,6 @@ import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.media.Image;
 import android.media.ImageWriter;
-import android.opengl.EGL14;
-import android.opengl.EGLConfig;
-import android.opengl.EGLContext;
-import android.opengl.EGLDisplay;
-import android.opengl.EGLSurface;
-import android.opengl.EGLExt;
-import android.opengl.GLES20;
-import android.opengl.GLUtils;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.SystemClock;
@@ -36,7 +28,6 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
-import java.nio.FloatBuffer;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -60,8 +51,7 @@ import top.niunaijun.blackbox.utils.VirtualResourceManager;
  */
 public final class SpoofCamera2 {
     private static final String TAG = "SpoofCamera2";
-    private static final int MODE_CANVAS = 1;
-    private static final int MODE_EGL = 2;
+    private static final int MODE_PREVIEW = 4;
     private static final int MODE_IMAGE = 3;
 
     private static Method openWithHandler;
@@ -72,6 +62,8 @@ public final class SpoofCamera2 {
     private static final AtomicInteger SEQUENCES = new AtomicInteger();
     private static final AtomicLong FRAMES = new AtomicLong();
     private static boolean loggedBitmap;
+    private static volatile int sensorOrientation = 90;
+    private static volatile boolean frontFacing;
     private static final SpoofVideoRenderer VIDEO = new SpoofVideoRenderer();
 
     private static final List<SpoofSession> SESSIONS = new ArrayList<>();
@@ -79,14 +71,6 @@ public final class SpoofCamera2 {
     private static final Map<Surface, ImageWriter> WRITERS = Collections.synchronizedMap(new WeakHashMap<Surface, ImageWriter>());
     private static final Map<Surface, Boolean> SURFACE_FAILURES = Collections.synchronizedMap(new WeakHashMap<Surface, Boolean>());
     private static final Map<Surface, Integer> FORMATS = Collections.synchronizedMap(new WeakHashMap<Surface, Integer>());
-
-    private static EGLDisplay eglDisplay = EGL14.EGL_NO_DISPLAY;
-    private static EGLContext eglContext = EGL14.EGL_NO_CONTEXT;
-    private static EGLConfig eglConfig;
-    private static int program;
-    private static int texture;
-    private static FloatBuffer quad;
-    private static final Map<Surface, EGLSurface> EGL_SURFACES = new WeakHashMap<>();
 
     private SpoofCamera2() {
     }
@@ -96,6 +80,9 @@ public final class SpoofCamera2 {
     }
 
     public static int videoPositionMs() { return VIDEO.positionMs(); }
+
+    static int sensorOrientation() { return sensorOrientation; }
+    static boolean frontFacing() { return frontFacing; }
 
     /** Draws the replacement photo or video frame onto a preview texture. */
     public static void submitDraw(final Surface surface) {
@@ -156,6 +143,16 @@ public final class SpoofCamera2 {
             return;
         }
         Slog.i(TAG, "virtual Camera2 for " + pkg + " id=" + cameraId);
+        if ("ru.oneme.app".equals(pkg)) {
+            try {
+                CameraCharacteristics characteristics = ((CameraManager) self).getCameraCharacteristics(cameraId);
+                Integer orientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+                Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
+                if (orientation != null) sensorOrientation = orientation;
+                frontFacing = Integer.valueOf(CameraCharacteristics.LENS_FACING_FRONT).equals(facing);
+                Slog.i(TAG, "camera orientation=" + sensorOrientation + " front=" + frontFacing);
+            } catch (Throwable error) { Slog.w(TAG, "camera orientation unavailable: " + error); }
+        }
         SpoofDevice device = new SpoofDevice(cameraId == null ? "0" : cameraId, callback, handler, executor);
         post(executor, handler, new Runnable() {
             @Override
@@ -197,19 +194,20 @@ public final class SpoofCamera2 {
             synchronized (SESSIONS) {
                 sessions = new ArrayList<>(SESSIONS);
             }
+            Set<Surface> outputs = new ArraySet<>();
+            for (SpoofSession session : sessions) outputs.addAll(session.targets());
+            // A camera switch can reuse the consumer texture with a new Surface
+            // wrapper. Disconnect the old EGL producer before reconnecting it.
+            VIDEO.retainOutputs(outputs);
             boolean active = false;
             if (spoof && !sessions.isEmpty()) {
-                boolean video = VIDEO.beginFrame(VirtualResourceManager.getCameraFile(pkg, "record.mp4"), pump());
+                VIDEO.beginFrame(VirtualResourceManager.getCameraFile(pkg, "record.mp4"), pump());
                 Bitmap bitmap = VirtualResourceManager.cameraBitmap(pkg);
                 byte[] jpeg = VirtualResourceManager.cameraJpeg(pkg);
                 for (SpoofSession session : sessions) {
                     active = true;
                     for (Surface surface : session.targets()) {
-                        if (video && isPreviewSurface(surface) && VIDEO.draw(surface, bitmap)) {
-                            if (!Integer.valueOf(4).equals(MODES.get(surface))) putMode(surface, 4);
-                        } else {
-                            drawSurface(surface, bitmap, jpeg);
-                        }
+                        drawSurface(surface, bitmap, jpeg);
                     }
                     if (session.repeating) session.fireRepeating();
                 }
@@ -259,7 +257,7 @@ public final class SpoofCamera2 {
         }
         try {
             int format = surfaceFormat(surface);
-            // EGL/Canvas override the producer format with RGBA. Doing this to
+            // EGL overrides the producer format with RGBA. Doing this to
             // a JPEG ImageReader makes its native getPlanes() abort the process.
             if (format == ImageFormat.JPEG || format == 0x21 || format == ImageFormat.YUV_420_888) {
                 boolean queued = writeImage(surface, bitmap, jpeg, timestamp);
@@ -270,28 +268,12 @@ public final class SpoofCamera2 {
                 surfaceFailure(surface, "unsupported consumer format=" + format);
                 return false;
             }
-            if (mode != null && mode == MODE_CANVAS) {
-                return drawCanvas(surface, bitmap);
-            }
-            if (mode != null && mode == MODE_EGL) {
-                return drawEgl(surface, bitmap);
-            }
-            if (mode != null && mode == MODE_IMAGE) {
-                return writeImage(surface, bitmap, jpeg, timestamp);
-            }
-            if (bitmap != null && drawCanvas(surface, bitmap)) {
-                putMode(surface, MODE_CANVAS);
-                return true;
-            }
-            if (bitmap != null && drawEgl(surface, bitmap)) {
-                putMode(surface, MODE_EGL);
-                return true;
-            }
-            if (bitmap != null && writeImage(surface, bitmap, jpeg, timestamp)) {
-                putMode(surface, MODE_IMAGE);
-                return true;
-            }
-            surfaceFailure(surface, "no producer accepted the replacement frame");
+            // Keep one EGL producer for video and the fallback photo. Canvas
+            // must not take over a camera texture: HWUI can abort asynchronously
+            // when that consumer is released or reconnected during a call.
+            boolean queued = VIDEO.draw(surface, bitmap);
+            if (queued && !Integer.valueOf(MODE_PREVIEW).equals(mode)) putMode(surface, MODE_PREVIEW);
+            return queued;
         } catch (Throwable t) {
             surfaceFailure(surface, t.toString());
         }
@@ -311,36 +293,6 @@ public final class SpoofCamera2 {
         Slog.i(TAG, "surface frame queued mode=" + mode + " " + surface);
     }
 
-    private static boolean drawCanvas(Surface surface, Bitmap bitmap) {
-        Canvas canvas = null;
-        try {
-            canvas = surface.lockCanvas(null);
-        } catch (Throwable ignored) {
-        }
-        if (canvas == null) {
-            try {
-                canvas = surface.lockHardwareCanvas();
-            } catch (Throwable ignored) {
-            }
-        }
-        if (canvas == null || bitmap == null) {
-            if (canvas != null) {
-                try { surface.unlockCanvasAndPost(canvas); } catch (Throwable ignored) {}
-            }
-            return false;
-        }
-        try {
-            canvas.drawBitmap(bitmap, centerCrop(bitmap.getWidth(), bitmap.getHeight(), canvas.getWidth(), canvas.getHeight()),
-                    new Rect(0, 0, canvas.getWidth(), canvas.getHeight()), null);
-            return true;
-        } finally {
-            try {
-                surface.unlockCanvasAndPost(canvas);
-            } catch (Throwable ignored) {
-            }
-        }
-    }
-
     private static Rect centerCrop(int sourceWidth, int sourceHeight, int width, int height) {
         if ("ru.oneme.app".equals(VirtualResourceManager.currentPackage())) { width = 1; height = 1; }
         int cropWidth = sourceWidth;
@@ -353,121 +305,6 @@ public final class SpoofCamera2 {
         int left = (sourceWidth - cropWidth) / 2;
         int top = (sourceHeight - cropHeight) / 2;
         return new Rect(left, top, left + cropWidth, top + cropHeight);
-    }
-
-    private static boolean drawEgl(Surface surface, Bitmap bitmap) {
-        if (!ensureEgl()) return false;
-        EGLSurface window;
-        synchronized (EGL_SURFACES) {
-            window = EGL_SURFACES.get(surface);
-            if (window == null || window == EGL14.EGL_NO_SURFACE) {
-                int[] attrs = {EGL14.EGL_NONE};
-                window = EGL14.eglCreateWindowSurface(eglDisplay, eglConfig, surface, attrs, 0);
-                if (window == null || window == EGL14.EGL_NO_SURFACE) return false;
-                EGL_SURFACES.put(surface, window);
-            }
-        }
-        if (!EGL14.eglMakeCurrent(eglDisplay, window, window, eglContext)) return false;
-        int[] width = new int[1];
-        int[] height = new int[1];
-        EGL14.eglQuerySurface(eglDisplay, window, EGL14.EGL_WIDTH, width, 0);
-        EGL14.eglQuerySurface(eglDisplay, window, EGL14.EGL_HEIGHT, height, 0);
-        GLES20.glViewport(0, 0, Math.max(1, width[0]), Math.max(1, height[0]));
-        if (bitmap == null || program == 0) return false;
-        GLES20.glClearColor(0f, 0f, 0f, 1f);
-        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-        GLES20.glUseProgram(program);
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
-        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0);
-        Rect crop = centerCrop(bitmap.getWidth(), bitmap.getHeight(), width[0], height[0]);
-        float left = (float) crop.left / bitmap.getWidth();
-        float right = (float) crop.right / bitmap.getWidth();
-        float top = (float) crop.top / bitmap.getHeight();
-        float bottom = (float) crop.bottom / bitmap.getHeight();
-        quad.clear();
-        quad.put(new float[]{-1f, -1f, left, bottom, 1f, -1f, right, bottom,
-                -1f, 1f, left, top, 1f, 1f, right, top}).position(0);
-        quad.position(0);
-        GLES20.glVertexAttribPointer(0, 2, GLES20.GL_FLOAT, false, 16, quad);
-        quad.position(2);
-        GLES20.glVertexAttribPointer(1, 2, GLES20.GL_FLOAT, false, 16, quad);
-        GLES20.glEnableVertexAttribArray(0);
-        GLES20.glEnableVertexAttribArray(1);
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
-        EGLExt.eglPresentationTimeANDROID(eglDisplay, window, System.nanoTime());
-        return EGL14.eglSwapBuffers(eglDisplay, window)
-                && GLES20.glGetError() == GLES20.GL_NO_ERROR;
-    }
-
-    private static boolean ensureEgl() {
-        if (eglContext != EGL14.EGL_NO_CONTEXT) return true;
-        eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY);
-        if (eglDisplay == EGL14.EGL_NO_DISPLAY) return false;
-        int[] version = new int[2];
-        if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) return false;
-        int[] configAttrs = {
-                EGL14.EGL_RED_SIZE, 8,
-                EGL14.EGL_GREEN_SIZE, 8,
-                EGL14.EGL_BLUE_SIZE, 8,
-                EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-                0x3142, 1,
-                EGL14.EGL_NONE
-        };
-        EGLConfig[] configs = new EGLConfig[1];
-        int[] count = new int[1];
-        if (!EGL14.eglChooseConfig(eglDisplay, configAttrs, 0, configs, 0, 1, count, 0) || count[0] == 0) {
-            return false;
-        }
-        eglConfig = configs[0];
-        int[] contextAttrs = {EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE};
-        eglContext = EGL14.eglCreateContext(eglDisplay, eglConfig, EGL14.EGL_NO_CONTEXT, contextAttrs, 0);
-        if (eglContext == EGL14.EGL_NO_CONTEXT) return false;
-        int[] pbufferAttrs = {EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE};
-        EGLSurface pbuffer = EGL14.eglCreatePbufferSurface(eglDisplay, eglConfig, pbufferAttrs, 0);
-        if (pbuffer == null || pbuffer == EGL14.EGL_NO_SURFACE) return false;
-        if (!EGL14.eglMakeCurrent(eglDisplay, pbuffer, pbuffer, eglContext)) return false;
-        program = buildProgram();
-        int[] textures = new int[1];
-        GLES20.glGenTextures(1, textures, 0);
-        texture = textures[0];
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
-        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-        float[] coords = {
-                -1f, -1f, 0f, 1f,
-                1f, -1f, 1f, 1f,
-                -1f, 1f, 0f, 0f,
-                1f, 1f, 1f, 0f
-        };
-        quad = ByteBuffer.allocateDirect(coords.length * 4).order(ByteOrder.nativeOrder()).asFloatBuffer();
-        quad.put(coords).position(0);
-        return program != 0;
-    }
-
-    private static int buildProgram() {
-        int vertex = shader(GLES20.GL_VERTEX_SHADER,
-                "attribute vec2 aPos;attribute vec2 aTex;varying vec2 vTex;void main(){gl_Position=vec4(aPos,0.0,1.0);vTex=aTex;}");
-        int fragment = shader(GLES20.GL_FRAGMENT_SHADER,
-                "precision mediump float;varying vec2 vTex;uniform sampler2D uTex;void main(){gl_FragColor=texture2D(uTex,vTex);}");
-        if (vertex == 0 || fragment == 0) return 0;
-        int id = GLES20.glCreateProgram();
-        GLES20.glAttachShader(id, vertex);
-        GLES20.glAttachShader(id, fragment);
-        GLES20.glBindAttribLocation(id, 0, "aPos");
-        GLES20.glBindAttribLocation(id, 1, "aTex");
-        GLES20.glLinkProgram(id);
-        return id;
-    }
-
-    private static int shader(int type, String source) {
-        int id = GLES20.glCreateShader(type);
-        GLES20.glShaderSource(id, source);
-        GLES20.glCompileShader(id);
-        return id;
     }
 
     private static boolean writeImage(Surface surface, Bitmap bitmap, byte[] jpeg, long timestamp) {

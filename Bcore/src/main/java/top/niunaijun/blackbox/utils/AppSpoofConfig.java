@@ -24,17 +24,20 @@ public class AppSpoofConfig {
     public final boolean grantMic;
     public final boolean grantSensors;
     public final boolean cameraAudioFromVideo;
+    public final boolean cameraFillFrame;
 
-    private AppSpoofConfig(boolean grantCamera, boolean grantMic, boolean grantSensors, boolean cameraAudioFromVideo) {
+    private AppSpoofConfig(boolean grantCamera, boolean grantMic, boolean grantSensors,
+                           boolean cameraAudioFromVideo, boolean cameraFillFrame) {
         this.grantCamera = grantCamera;
         this.grantMic = grantMic;
         this.grantSensors = grantSensors;
         this.cameraAudioFromVideo = cameraAudioFromVideo;
+        this.cameraFillFrame = cameraFillFrame;
     }
 
     public static AppSpoofConfig fromFile(File f) {
         if (f == null || !f.exists()) {
-            return new AppSpoofConfig(true, true, true, false); // Default: grant all (real hardware)
+            return new AppSpoofConfig(true, true, true, false, false); // Default: grant all (real hardware)
         }
         try {
             StringBuilder sb = new StringBuilder();
@@ -47,10 +50,11 @@ public class AppSpoofConfig {
             boolean cam = o.optBoolean("grant_camera", true);
             boolean mic = o.optBoolean("grant_mic", true);
             boolean sens = o.optBoolean("grant_sensors", true);
-            return new AppSpoofConfig(cam, mic, sens, "video".equals(o.optString("camera_audio_source", "microphone")));
+            return new AppSpoofConfig(cam, mic, sens, "video".equals(o.optString("camera_audio_source", "microphone")),
+                    "fill".equals(o.optString("camera_scale_mode", "fit")));
         } catch (Exception e) {
             Slog.w("AppSpoofConfig", "Failed to parse config: " + e.getMessage());
-            return new AppSpoofConfig(true, true, true, false);
+            return new AppSpoofConfig(true, true, true, false, false);
         }
     }
 }
