@@ -4,6 +4,7 @@ import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkInfo;
+import android.net.ConnectivityManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
@@ -13,6 +14,7 @@ import android.os.RemoteException;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.List;
 
 import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.app.BActivityThread;
@@ -36,17 +38,34 @@ public final class GuestNetworkView {
     }
 
     public static NetworkCapabilities capabilities(NetworkCapabilities source) {
+        return capabilities(null, source);
+    }
+
+    private static NetworkCapabilities capabilities(Object service, NetworkCapabilities source) {
         if (source == null || !source.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return source;
+        long physicalTransports = transportBits(source)
+                & ~(1L << NetworkCapabilities.TRANSPORT_VPN);
+        if (physicalTransports == 0) {
+            NetworkCapabilities physical = physicalCapabilities(service, source);
+            physicalTransports = transportBits(physical)
+                    & ~(1L << NetworkCapabilities.TRANSPORT_VPN);
+        }
         NetworkCapabilities copy = new NetworkCapabilities(source);
         try {
             Class<?> type = Class.forName("android.net.NetworkCapabilities$Builder");
             Object builder = type.getConstructor(NetworkCapabilities.class).newInstance(source);
             type.getMethod("removeTransportType", int.class).invoke(builder, NetworkCapabilities.TRANSPORT_VPN);
+            for (int transport = 0; transport < Long.SIZE; transport++) {
+                if ((physicalTransports & (1L << transport)) != 0) {
+                    type.getMethod("addTransportType", int.class).invoke(builder, transport);
+                }
+            }
             type.getMethod("addCapability", int.class).invoke(builder, NetworkCapabilities.NET_CAPABILITY_NOT_VPN);
             copy = (NetworkCapabilities) type.getMethod("build").invoke(builder);
         } catch (Throwable unavailable) {
             // Older Android versions do not have the public Builder.
-            set(copy, "mTransportTypes", number(copy, "mTransportTypes") & ~(1L << NetworkCapabilities.TRANSPORT_VPN));
+            set(copy, "mTransportTypes", (number(copy, "mTransportTypes")
+                    & ~(1L << NetworkCapabilities.TRANSPORT_VPN)) | physicalTransports);
             set(copy, "mNetworkCapabilities", number(copy, "mNetworkCapabilities") | (1L << NetworkCapabilities.NET_CAPABILITY_NOT_VPN));
         }
         // VpnTransportInfo/session name and underlying network list also identify the tunnel.
@@ -59,8 +78,84 @@ public final class GuestNetworkView {
                 || !copy.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) {
             throw new IllegalStateException("VPN capabilities were not redacted");
         }
-        Slog.d(TAG, "redacted VPN capabilities; real network handle preserved");
+        Slog.d(TAG, "redacted VPN capabilities; physical transports="
+                + Long.toHexString(physicalTransports) + "; real network handle preserved");
         return copy;
+    }
+
+    private static long transportBits(NetworkCapabilities capabilities) {
+        if (capabilities == null) return 0;
+        long result = 0;
+        for (int transport = 0; transport < Long.SIZE; transport++) {
+            try {
+                if (capabilities.hasTransport(transport)) result |= 1L << transport;
+            } catch (IllegalArgumentException ignored) {
+                // The platform rejects values above its highest known transport.
+                break;
+            }
+        }
+        return result;
+    }
+
+    private static NetworkCapabilities physicalCapabilities(Object service,
+                                                              NetworkCapabilities vpn) {
+        Object connectivity = service;
+        if (connectivity == null) {
+            connectivity = BlackBoxCore.getContext().getSystemService(ConnectivityManager.class);
+        }
+        try {
+            Object underlying = null;
+            try {
+                Method getter = NetworkCapabilities.class.getMethod("getUnderlyingNetworks");
+                underlying = getter.invoke(vpn);
+            } catch (Throwable unavailable) {
+                try {
+                    Field field = NetworkCapabilities.class.getDeclaredField("mUnderlyingNetworks");
+                    field.setAccessible(true);
+                    underlying = field.get(vpn);
+                } catch (Throwable ignored) {
+                }
+            }
+            if (underlying instanceof List) {
+                for (Object value : (List<?>) underlying) {
+                    if (!(value instanceof Network)) continue;
+                    NetworkCapabilities candidate = (NetworkCapabilities) query(
+                            connectivity, "getNetworkCapabilities", value);
+                    if (isPhysical(candidate)) return candidate;
+                }
+            }
+
+            // Some VPN implementations omit the underlying list. In that case select the
+            // validated non-VPN Internet network without changing the VPN Network handle.
+            NetworkCapabilities fallback = null;
+            for (Method method : connectivity.getClass().getMethods()) {
+                if (!method.getName().equals("getAllNetworks")
+                        || method.getParameterTypes().length != 0) continue;
+                Network[] networks = (Network[]) method.invoke(connectivity);
+                if (networks == null) break;
+                for (Network network : networks) {
+                    NetworkCapabilities candidate = (NetworkCapabilities) query(
+                            connectivity, "getNetworkCapabilities", network);
+                    if (!isPhysical(candidate)) continue;
+                    if (candidate.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)) {
+                        return candidate;
+                    }
+                    if (fallback == null) fallback = candidate;
+                }
+                break;
+            }
+            return fallback;
+        } catch (Throwable error) {
+            Slog.w(TAG, "physical transport query: " + error.getMessage());
+            return null;
+        }
+    }
+
+    private static boolean isPhysical(NetworkCapabilities capabilities) {
+        return capabilities != null
+                && !capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                && capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                && transportBits(capabilities) != 0;
     }
 
     private static long number(Object target, String name) {
@@ -112,7 +207,7 @@ public final class GuestNetworkView {
     }
 
     public static Object result(Object service, Object result) {
-        if (result instanceof NetworkCapabilities) return capabilities((NetworkCapabilities) result);
+        if (result instanceof NetworkCapabilities) return capabilities(service, (NetworkCapabilities) result);
         if (result instanceof LinkProperties) return linkProperties(service, (LinkProperties) result);
         if (result instanceof NetworkInfo && ((NetworkInfo) result).getType() == 17) {
             NetworkInfo original = (NetworkInfo) result;
