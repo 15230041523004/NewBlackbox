@@ -67,6 +67,9 @@ interface IBAccountManagerService {
     void registerAccountListener(in String[] accountTypes, String opPackageName, int userId);
     void unregisterAccountListener(in String[] accountTypes, String opPackageName, int userId);
 
+    byte[] exportPackageAccounts(String packageName, int userId);
+    void importPackageAccounts(String packageName, int userId, in byte[] payload);
+
     /* Check if the package in a user can access an account */
 //    boolean hasAccountAccess(in Account account, String packageName, in UserHandle userHandle);
     /* Crate an intent to request account access for package and a given user id */

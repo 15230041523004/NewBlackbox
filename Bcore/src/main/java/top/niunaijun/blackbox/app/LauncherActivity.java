@@ -4,6 +4,8 @@ import android.app.Activity;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Bundle;
 
@@ -12,6 +14,7 @@ import androidx.annotation.Nullable;
 import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.R;
 import top.niunaijun.blackbox.utils.Slog;
+import top.niunaijun.blackbox.utils.compat.GuestIconLoader;
 import android.util.Log;
 import android.widget.ImageView;
 import android.widget.TextView;
@@ -80,11 +83,13 @@ public class LauncherActivity extends Activity {
             Drawable drawable = null;
             String appName = packageName;
             try {
-                if (packageInfo != null && packageInfo.applicationInfo != null) {
-                    PackageManager pm = getPackageManager();
-                    drawable = pm.getApplicationIcon(packageInfo.applicationInfo);
-                    CharSequence label = pm.getApplicationLabel(packageInfo.applicationInfo);
-                    if (label != null) appName = label.toString();
+                Bitmap icon = GuestIconLoader.load(packageName, userId);
+                if (icon != null) {
+                    drawable = new BitmapDrawable(getResources(), icon);
+                }
+                CharSequence label = GuestIconLoader.loadLabel(packageName, userId);
+                if (label != null && label.length() > 0) {
+                    appName = label.toString();
                 }
             } catch (Exception e) {
                 Slog.w(TAG, "Failed to load app icon or name for " + packageName + ": " + e.getMessage());

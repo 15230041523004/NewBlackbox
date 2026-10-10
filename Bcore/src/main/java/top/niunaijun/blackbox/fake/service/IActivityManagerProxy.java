@@ -105,26 +105,65 @@ public class IActivityManagerProxy extends ClassInvocationStub {
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         try {
             return super.invoke(proxy, method, args);
-        } catch (SecurityException e) {
-            
-            String methodName = method.getName();
-            Slog.w(TAG, "ActivityManager invoke: SecurityException in " + methodName + ", returning safe default", e);
-            
-            
-            if (methodName.startsWith("set") || methodName.startsWith("update")) {
-                return null; 
-            } else if (methodName.startsWith("get") || methodName.startsWith("query")) {
-                return null; 
-            } else if (methodName.startsWith("start") || methodName.startsWith("bind")) {
-                return false; 
-            } else if (methodName.startsWith("stop") || methodName.startsWith("unbind")) {
-                return true; 
-            } else {
-                return null; 
+        } catch (Throwable thrown) {
+            Throwable cause = thrown;
+            if (cause instanceof java.lang.reflect.InvocationTargetException && cause.getCause() != null) {
+                cause = cause.getCause();
             }
-        } catch (Exception e) {
-            Slog.e(TAG, "ActivityManager invoke: Unexpected error in " + method.getName(), e);
-            return super.invoke(proxy, method, args);
+            if (cause instanceof SecurityException) {
+                Slog.w(TAG, "ActivityManager invoke: SecurityException in " + method.getName() + ", returning safe default");
+                return safeDefault(method);
+            }
+            Slog.e(TAG, "ActivityManager invoke: Unexpected error in " + method.getName(), cause);
+            if (cause != thrown && cause != null) {
+                throw cause;
+            }
+            throw thrown;
+        }
+    }
+
+    /**
+     * A primitive ActivityManager getter must not answer {@code null}. The proxy
+     * unboxes it and Play services dies with "Expected to unbox a primitive".
+     */
+    static Object safeDefault(Method method) {
+        Class<?> returnType = method.getReturnType();
+        String methodName = method.getName();
+        if (returnType == boolean.class || returnType == Boolean.class) {
+            return methodName.startsWith("stop") || methodName.startsWith("unbind");
+        }
+        if (returnType == int.class || returnType == Integer.class) {
+            return 0;
+        }
+        if (returnType == long.class || returnType == Long.class) {
+            return 0L;
+        }
+        if (returnType == float.class || returnType == Float.class) {
+            return 0f;
+        }
+        if (returnType == double.class || returnType == Double.class) {
+            return 0d;
+        }
+        return null;
+    }
+
+    /**
+     * {@code broadcastIntentWithFeature} carries the target user as its last
+     * argument. {@code USER_ALL} (-1) and {@code USER_CURRENT} (-2) require
+     * {@code INTERACT_ACROSS_USERS}, which the host uid does not have.
+     */
+    public static void normalizeBroadcastUser(Object[] args) {
+        if (args == null || args.length == 0) {
+            return;
+        }
+        Object last = args[args.length - 1];
+        if (!(last instanceof Integer)) {
+            return;
+        }
+        int userId = (Integer) last;
+        // UserHandle.USER_ALL is -1. UserHandle.USER_CURRENT is -2.
+        if (userId == -1 || userId == -2) {
+            args[args.length - 1] = BlackBoxCore.getHostUserId();
         }
     }
 
@@ -589,6 +628,7 @@ public class IActivityManagerProxy extends ClassInvocationStub {
                     args[i] = null;
                 }
             }
+            normalizeBroadcastUser(args);
             return method.invoke(who, args);
         }
 
@@ -778,6 +818,38 @@ public class IActivityManagerProxy extends ClassInvocationStub {
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Object blackBox = BRUserInfo.get()._new(BActivityThread.getUserId(), "BlackBox", BRUserInfo.get().FLAG_PRIMARY());
             return blackBox;
+        }
+    }
+
+    @ProxyMethod("getCurrentUserId")
+    public static class GetCurrentUserId extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            try {
+                Object result = method.invoke(who, args);
+                if (result instanceof Integer) {
+                    return result;
+                }
+            } catch (Throwable ignored) {
+            }
+            return BlackBoxCore.getHostUserId();
+        }
+    }
+
+    @ProxyMethod("getUidProcessState")
+    public static class GetUidProcessState extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            try {
+                MethodParameterUtils.replaceAllAppPkg(args);
+                Object result = method.invoke(who, args);
+                if (result instanceof Integer) {
+                    return result;
+                }
+            } catch (Throwable ignored) {
+            }
+            // ActivityManager.PROCESS_STATE_TOP. A null answer crashes the caller.
+            return 2;
         }
     }
 

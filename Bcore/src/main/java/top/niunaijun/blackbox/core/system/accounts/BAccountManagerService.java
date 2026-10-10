@@ -1177,6 +1177,108 @@ public class BAccountManagerService extends IBAccountManagerService.Stub impleme
         }
     }
 
+    @Override
+    public byte[] exportPackageAccounts(String packageName, int userId) {
+        ensureAuthenticators(packageName);
+        BUserAccounts accounts = getUserAccounts(userId);
+        ArrayList<BAccount> matched = new ArrayList<>();
+        synchronized (accounts.lock) {
+            for (BAccount account : accounts.accounts) {
+                if (accountBelongsToPackage(account, packageName)) {
+                    matched.add(account);
+                }
+            }
+        }
+        Parcel parcel = Parcel.obtain();
+        try {
+            parcel.writeTypedList(matched);
+            return parcel.marshall();
+        } finally {
+            parcel.recycle();
+        }
+    }
+
+    @Override
+    public void importPackageAccounts(String packageName, int userId, byte[] payload) {
+        if (payload == null) {
+            return;
+        }
+        ensureAuthenticators(packageName);
+        Parcel parcel = Parcel.obtain();
+        try {
+            parcel.unmarshall(payload, 0, payload.length);
+            parcel.setDataPosition(0);
+            List<BAccount> incoming = parcel.createTypedArrayList(BAccount.CREATOR);
+            if (incoming == null) {
+                incoming = new ArrayList<>();
+            }
+            BUserAccounts accounts = getUserAccounts(userId);
+            accounts.userId = userId;
+            synchronized (accounts.lock) {
+                Iterator<BAccount> iterator = accounts.accounts.iterator();
+                while (iterator.hasNext()) {
+                    if (accountBelongsToPackage(iterator.next(), packageName)) {
+                        iterator.remove();
+                    }
+                }
+                for (BAccount account : incoming) {
+                    if (account == null || account.account == null) {
+                        continue;
+                    }
+                    accounts.delAccount(account.account);
+                    accounts.accounts.add(account);
+                }
+                saveAllAccounts();
+            }
+        } finally {
+            parcel.recycle();
+        }
+    }
+
+    /**
+     * Loads this package's authenticators when they are not already cached.
+     * A cold cache used to drop the account slice from the archive, and restore
+     * then removed those accounts.
+     */
+    private void ensureAuthenticators(String packageName) {
+        if (packageName == null) {
+            return;
+        }
+        synchronized (mAuthenticatorCache) {
+            for (AuthenticatorInfo info : mAuthenticatorCache.authenticators.values()) {
+                if (info == null) {
+                    continue;
+                }
+                if (info.desc != null && packageName.equals(info.desc.packageName)) {
+                    return;
+                }
+                if (info.serviceInfo != null && packageName.equals(info.serviceInfo.packageName)) {
+                    return;
+                }
+            }
+        }
+        loadAuthenticatorCache(packageName);
+    }
+
+    private boolean accountBelongsToPackage(BAccount account, String packageName) {
+        if (account == null || account.account == null || packageName == null) {
+            return false;
+        }
+        if (account.visibility != null && account.visibility.containsKey(packageName)) {
+            return true;
+        }
+        synchronized (mAuthenticatorCache) {
+            AuthenticatorInfo info = mAuthenticatorCache.authenticators.get(account.account.type);
+            if (info == null) {
+                return false;
+            }
+            if (info.desc != null && packageName.equals(info.desc.packageName)) {
+                return true;
+            }
+            return info.serviceInfo != null && packageName.equals(info.serviceInfo.packageName);
+        }
+    }
+
     public BUserAccounts getUserAccounts(int userId) {
         synchronized (mUserAccountsMap) {
             BUserAccounts bUserAccounts = mUserAccountsMap.get(userId);

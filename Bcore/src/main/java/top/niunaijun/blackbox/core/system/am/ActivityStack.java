@@ -35,6 +35,7 @@ import top.niunaijun.blackbox.core.system.ProcessRecord;
 import top.niunaijun.blackbox.core.system.pm.BPackageManagerService;
 import top.niunaijun.blackbox.core.system.pm.PackageManagerCompat;
 import top.niunaijun.blackbox.proxy.ProxyActivity;
+import top.niunaijun.blackbox.proxy.GuestTaskAlias;
 import top.niunaijun.blackbox.proxy.ProxyManifest;
 import top.niunaijun.blackbox.proxy.record.ProxyActivityRecord;
 import top.niunaijun.blackbox.utils.ComponentUtils;
@@ -330,6 +331,19 @@ public class ActivityStack {
         return tasks.get(tasks.size() - 1).getTopActivityRecord();
     }
 
+    private ComponentName stubComponent(ActivityInfo activityInfo, int vpid, boolean translucent) {
+        if (!translucent && activityInfo != null) {
+            String alias = GuestTaskAlias.component(activityInfo.packageName, vpid);
+            if (alias != null) {
+                return new ComponentName(BlackBoxCore.getHostPkg(), alias);
+            }
+        }
+        if (translucent) {
+            return new ComponentName(BlackBoxCore.getHostPkg(), ProxyManifest.TransparentProxyActivity(vpid));
+        }
+        return new ComponentName(BlackBoxCore.getHostPkg(), ProxyManifest.getProxyActivity(vpid));
+    }
+
     private Intent getStartStubActivityIntentInner(Intent intent, int vpid,
                                                    int userId, ProxyActivityRecord target,
                                                    ActivityInfo activityInfo) {
@@ -346,15 +360,11 @@ public class ActivityStack {
             assert resources != null;
             typedArray = resources.newTheme().obtainStyledAttributes(id, BRRstyleable.get().Window());
             boolean windowIsTranslucent = typedArray.getBoolean(BRRstyleable.get().Window_windowIsTranslucent(), false);
-            if (windowIsTranslucent) {
-                shadow.setComponent(new ComponentName(BlackBoxCore.getHostPkg(), ProxyManifest.TransparentProxyActivity(vpid)));
-            } else {
-                shadow.setComponent(new ComponentName(BlackBoxCore.getHostPkg(), ProxyManifest.getProxyActivity(vpid)));
-            }
+            shadow.setComponent(stubComponent(activityInfo, vpid, windowIsTranslucent));
             Slog.d(TAG, activityInfo + ", windowIsTranslucent: " + windowIsTranslucent);
         } catch (Throwable e) {
             e.printStackTrace();
-            shadow.setComponent(new ComponentName(BlackBoxCore.getHostPkg(), ProxyManifest.getProxyActivity(vpid)));
+            shadow.setComponent(stubComponent(activityInfo, vpid, false));
         } finally {
             if (typedArray != null) {
                 typedArray.recycle();

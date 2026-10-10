@@ -139,12 +139,20 @@ public final class AppInstrumentation extends BaseInstrumentationDelegate implem
     public void callActivityOnCreate(Activity activity, Bundle icicle, PersistableBundle persistentState) {
         checkActivity(activity);
         super.callActivityOnCreate(activity, icicle, persistentState);
+        top.niunaijun.blackbox.utils.compat.TaskDescriptionCompat.apply(activity);
     }
 
     @Override
     public void callActivityOnCreate(Activity activity, Bundle icicle) {
         checkActivity(activity);
         super.callActivityOnCreate(activity, icicle);
+        top.niunaijun.blackbox.utils.compat.TaskDescriptionCompat.apply(activity);
+    }
+
+    @Override
+    public void callActivityOnResume(Activity activity) {
+        super.callActivityOnResume(activity);
+        top.niunaijun.blackbox.utils.compat.TaskDescriptionCompat.apply(activity);
     }
 
     @Override

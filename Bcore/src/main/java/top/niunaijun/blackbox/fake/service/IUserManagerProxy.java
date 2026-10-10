@@ -44,6 +44,25 @@ public class IUserManagerProxy extends BinderInvocationStub {
         }
     }
 
+    /**
+     * The host uid cannot query users. Play services calls this from
+     * {@code UserManager.isMainUser()} and dies if the system rejects it.
+     */
+    @ProxyMethod("getUserInfo")
+    public static class GetUserInfo extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            return mainUser();
+        }
+    }
+
+    public static Object mainUser() {
+        // FLAG_ADMIN (0x2) and FLAG_MAIN (0x4000). isMain() on Android 14+
+        // checks FLAG_MAIN, which FLAG_PRIMARY alone does not set.
+        int flags = BRUserInfo.get().FLAG_PRIMARY() | 0x00000002 | 0x00004000;
+        return BRUserInfo.get()._new(BlackBoxCore.getHostUserId(), "Owner", flags);
+    }
+
     @ProxyMethod("getProfileParent")
     public static class GetProfileParent extends MethodHook {
         @Override

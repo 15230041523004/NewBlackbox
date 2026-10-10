@@ -331,4 +331,12 @@ public class BAccountManager extends BlackManager<IBAccountManagerService> {
             e.printStackTrace();
         }
     }
+
+    public byte[] exportPackageAccounts(String packageName, int userId) throws RemoteException {
+        return getService().exportPackageAccounts(packageName, userId);
+    }
+
+    public void importPackageAccounts(String packageName, int userId, byte[] payload) throws RemoteException {
+        getService().importPackageAccounts(packageName, userId, payload);
+    }
 }

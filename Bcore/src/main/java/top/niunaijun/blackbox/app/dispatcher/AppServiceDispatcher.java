@@ -69,6 +69,11 @@ public class AppServiceDispatcher {
     }
 
     public int onStartCommand(Intent proxyIntent, int flags, int startId) {
+        // The system redelivers a sticky service with a null intent after the
+        // process dies. The proxy record lives in the extras, so there is nothing to start.
+        if (proxyIntent == null) {
+            return START_NOT_STICKY;
+        }
         ProxyServiceRecord stubRecord = ProxyServiceRecord.create(proxyIntent);
         if (stubRecord.mServiceIntent == null || stubRecord.mServiceInfo == null) {
             return START_NOT_STICKY;
