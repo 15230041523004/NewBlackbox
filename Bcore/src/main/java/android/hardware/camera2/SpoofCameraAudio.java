@@ -48,7 +48,12 @@ public final class SpoofCameraAudio {
         // geometry does not depend on which audio source the user selected.
         if (call) CALLS.put(record, Boolean.TRUE);
         boolean video = config.cameraAudioFromVideo && !config.grantCamera;
-        if (!video && config.grantMic) return false;
+        // Camera audio is allowed to replace AudioRecord only for an explicitly
+        // selected file source. Live modes (bypass/DSP/silence) must start the
+        // real recorder and continue through SpoofAudioHook; otherwise the old
+        // microphone PCM loop masks the selected live voice profile in calls.
+        boolean microphoneFile = !video && !config.grantMic && config.micUsesJavaFileSource();
+        if (!video && !microphoneFile) return false;
         Stream stream = new Stream(record.getSampleRate(), record.getChannelCount());
         stream.call = call;
         STREAMS.put(record, stream);

@@ -144,7 +144,11 @@ static JNINativeMethod gMethods[] = {
         {"hideXposed", "()V",                                     (void *) hideXposed},
         {"addIORule",  "(Ljava/lang/String;Ljava/lang/String;)V", (void *) addIORule},
         {"enableIO",   "()V",                                     (void *) enableIO},
-        {"enableMicTap", "(Ljava/lang/String;[BII)Z",             (void *) enableMicTap},
+        {"enableMicTap", "(Ljava/lang/String;[BIIIIFFFZ)Z",      (void *) enableMicTap},
+        {"processMicBytes", "([BIIII)V",                         (void *) processMicBytes},
+        {"processMicShorts", "([SIIII)V",                        (void *) processMicShorts},
+        {"processMicFloats", "([FIIII)V",                        (void *) processMicFloats},
+        {"processMicDirect", "(Ljava/nio/ByteBuffer;IIIZ)V",      (void *) processMicDirect},
         {"enableCameraBlock", "()Z",                             (void *) enableCameraBlock},
         {"init",       "(I)V",                                    (void *) init},
 };

@@ -7,6 +7,7 @@ import android.util.Log;
 import androidx.annotation.Keep;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 import java.util.List;
 
 import dalvik.system.DexFile;
@@ -32,7 +33,19 @@ public class NativeCore {
     public static native void enableIO();
 
     /** Patches in-process microphone reads. pcm is 16-bit little-endian, already decoded. */
-    public static native boolean enableMicTap(String wavPath, byte[] pcm, int sampleRate, int channels);
+    public static native boolean enableMicTap(String wavPath, byte[] pcm, int sampleRate, int channels,
+                                               int mode, int profile, float inputGain,
+                                               float pitchSemitones, float formantShift,
+                                               boolean underflowSilence);
+
+    public static native void processMicBytes(byte[] pcm, int offset, int byteCount,
+                                               int sampleRate, int channels);
+    public static native void processMicShorts(short[] pcm, int offset, int sampleCount,
+                                                int sampleRate, int channels);
+    public static native void processMicFloats(float[] pcm, int offset, int sampleCount,
+                                                int sampleRate, int channels);
+    public static native void processMicDirect(ByteBuffer pcm, int byteCount,
+                                                int sampleRate, int channels, boolean floatPcm);
 
     /** Stops Camera1 startPreview from streaming the real sensor. */
     public static native boolean enableCameraBlock();

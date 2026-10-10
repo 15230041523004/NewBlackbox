@@ -37,6 +37,7 @@ import top.niunaijun.blackbox.utils.VirtualResourceManager;
 public final class SpoofHookInstaller {
     private static final String TAG = "SpoofHookInstaller";
     private static volatile boolean sInstalled;
+    static volatile AppSpoofConfig sConfig;
 
     private SpoofHookInstaller() {
     }
@@ -46,6 +47,7 @@ public final class SpoofHookInstaller {
         VirtualResourceManager.bindGuestProfile();
         String pkg = VirtualResourceManager.currentPackage();
         AppSpoofConfig cfg = VirtualResourceManager.getSpoofConfig(pkg);
+        sConfig = cfg;
         Slog.i(TAG, "config " + pkg
                 + " camera=" + (cfg.grantCamera ? "real" : "fake")
                 + " mic=" + (cfg.grantMic ? "real" : "fake")
@@ -80,13 +82,18 @@ public final class SpoofHookInstaller {
 
     private static void installNativeMic(String pkg) {
         try {
+            AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
             VirtualMicProxy.ensurePcm();
             File mic = VirtualResourceManager.getMicFile(pkg, "audio.wav");
             String path = mic == null ? "" : mic.getAbsolutePath();
             byte[] pcm = VirtualMicProxy.pcmOrEmpty();
             boolean hooked = NativeCore.enableMicTap(path, pcm,
-                    VirtualMicProxy.pcmSampleRate(), VirtualMicProxy.pcmChannels());
+                    VirtualMicProxy.pcmSampleRate(), VirtualMicProxy.pcmChannels(),
+                    config.nativeMicMode(), config.nativeMicProfile(), config.micInputGain,
+                    config.micPitchSemitones, config.micFormantShift,
+                    config.micUnderflowSilence);
             Slog.i(TAG, "native mic " + (hooked ? "hooked" : "missed")
+                    + " mode=" + config.micMode + " profile=" + config.micProfile
                     + " bytes=" + (pcm == null ? 0 : pcm.length) + " " + path);
         } catch (Throwable t) {
             Slog.w(TAG, "native mic tap failed: " + t.getMessage());
@@ -685,45 +692,73 @@ final class SpoofBridges {
 
     static int onReadBytes(Object self, byte[] buf, int off, int size) throws Throwable {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
-        if (!micSpoof() || bReadBytes == null) return asInt(bReadBytes, self, buf, off, size);
+        if (!micSpoof() || bReadBytes == null) {
+            int read = asInt(bReadBytes, self, buf, off, size);
+            if (liveMicDsp() && read > 0) NativeCore.processMicBytes(buf, off, read, sampleRate(self), channels(self));
+            return read;
+        }
         VirtualMicProxy.ensurePcm();
         return VirtualMicProxy.fillBufferStatic(buf, off, size);
     }
 
     static int onReadBytesMode(Object self, byte[] buf, int off, int size, int mode) throws Throwable {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
-        if (!micSpoof() || bReadBytesMode == null) return asInt(bReadBytesMode, self, buf, off, size, mode);
+        if (!micSpoof() || bReadBytesMode == null) {
+            int read = asInt(bReadBytesMode, self, buf, off, size, mode);
+            if (liveMicDsp() && read > 0) NativeCore.processMicBytes(buf, off, read, sampleRate(self), channels(self));
+            return read;
+        }
         return onReadBytes(self, buf, off, size);
     }
 
     static int onReadShorts(Object self, short[] buf, int off, int size) throws Throwable {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
-        if (!micSpoof() || bReadShorts == null) return asInt(bReadShorts, self, buf, off, size);
+        if (!micSpoof() || bReadShorts == null) {
+            int read = asInt(bReadShorts, self, buf, off, size);
+            if (liveMicDsp() && read > 0) NativeCore.processMicShorts(buf, off, read, sampleRate(self), channels(self));
+            return read;
+        }
         VirtualMicProxy.ensurePcm();
         return VirtualMicProxy.fillShorts(buf, off, size);
     }
 
     static int onReadShortsMode(Object self, short[] buf, int off, int size, int mode) throws Throwable {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
-        if (!micSpoof() || bReadShortsMode == null) return asInt(bReadShortsMode, self, buf, off, size, mode);
+        if (!micSpoof() || bReadShortsMode == null) {
+            int read = asInt(bReadShortsMode, self, buf, off, size, mode);
+            if (liveMicDsp() && read > 0) NativeCore.processMicShorts(buf, off, read, sampleRate(self), channels(self));
+            return read;
+        }
         return onReadShorts(self, buf, off, size);
     }
 
     static int onReadBuffer(Object self, ByteBuffer buf, int size) throws Throwable {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, size);
-        if (!micSpoof() || bReadBuffer == null) return asInt(bReadBuffer, self, buf, size);
+        if (!micSpoof() || bReadBuffer == null) {
+            int read = asInt(bReadBuffer, self, buf, size);
+            if (liveMicDsp() && read > 0) NativeCore.processMicDirect(buf, read, sampleRate(self), channels(self), false);
+            return read;
+        }
         VirtualMicProxy.ensurePcm();
         return VirtualMicProxy.fillByteBuffer(buf, size);
     }
 
     static int onReadBufferMode(Object self, ByteBuffer buf, int size, int mode) throws Throwable {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, size);
-        if (!micSpoof() || bReadBufferMode == null) return asInt(bReadBufferMode, self, buf, size, mode);
+        if (!micSpoof() || bReadBufferMode == null) {
+            int read = asInt(bReadBufferMode, self, buf, size, mode);
+            if (liveMicDsp() && read > 0) NativeCore.processMicDirect(buf, read, sampleRate(self), channels(self), false);
+            return read;
+        }
         return onReadBuffer(self, buf, size);
     }
 
     static int onReadFloats(Object self, float[] buf, int off, int size, int mode) throws Throwable {
-        if (!micSpoof() || bReadFloats == null) return asInt(bReadFloats, self, buf, off, size, mode);
+        if (!micSpoof() || bReadFloats == null) {
+            int read = asInt(bReadFloats, self, buf, off, size, mode);
+            if (liveMicDsp() && read > 0) NativeCore.processMicFloats(buf, off, read, sampleRate(self), channels(self));
+            return read;
+        }
         VirtualMicProxy.ensurePcm();
         return VirtualMicProxy.fillFloats(buf, off, size);
     }
@@ -830,7 +865,24 @@ final class SpoofBridges {
     }
 
     private static boolean micSpoof() {
-        return VirtualResourceManager.spoofMic(VirtualResourceManager.currentPackage());
+        AppSpoofConfig config = SpoofHookInstaller.sConfig;
+        if (config == null) return false;
+        return !config.grantMic && config.micUsesJavaFileSource();
+    }
+
+    private static boolean liveMicDsp() {
+        AppSpoofConfig config = SpoofHookInstaller.sConfig;
+        return config != null && !config.grantMic && "dsp".equals(config.micMode);
+    }
+
+    private static int sampleRate(Object self) {
+        try { return self instanceof AudioRecord ? ((AudioRecord) self).getSampleRate() : 48000; }
+        catch (Throwable ignored) { return 48000; }
+    }
+
+    private static int channels(Object self) {
+        try { return self instanceof AudioRecord ? Math.max(1, ((AudioRecord) self).getChannelCount()) : 1; }
+        catch (Throwable ignored) { return 1; }
     }
 
     private static int asInt(Method backup, Object self, Object... args) throws Throwable {
