@@ -3,9 +3,11 @@ package top.niunaijun.blackbox.entity.location;
 
 import android.location.Location;
 import android.location.LocationManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.os.SystemClock;
 
 
 public class BLocation implements Parcelable {
@@ -97,6 +99,9 @@ public class BLocation implements Parcelable {
         location.setBearing(mBearing);
         location.setAccuracy(40f);
         location.setTime(System.currentTimeMillis());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            location.setElapsedRealtimeNanos(SystemClock.elapsedRealtimeNanos());
+        }
         Bundle extraBundle = new Bundle();
         
         int satelliteCount = 10;

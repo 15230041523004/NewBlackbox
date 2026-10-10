@@ -495,6 +495,11 @@ public class BActivityThread extends IBActivityThread.Stub {
         }
         Application application = null;
         try {
+            try {
+                top.niunaijun.blackbox.fake.service.FingerprintApplier.install(packageName);
+            } catch (Throwable fingerprintError) {
+                Slog.w(TAG, "Fingerprint profile was not applied: " + fingerprintError.getMessage());
+            }
             onBeforeCreateApplication(packageName, processName, packageContext);
 
             try {

@@ -143,6 +143,20 @@ public class VirtualResourceManager {
         return !getSpoofConfig(pkg).grantSensors;
     }
 
+    /** Profile-local fingerprint. No default-profile fallback: two clones stay distinct. */
+    public static File fingerprintFile(String pkg) {
+        bindGuestProfile();
+        if (TextUtils.isEmpty(pkg)) return null;
+        return path(profileKey(), pkg, "", "fingerprint.json");
+    }
+
+    /** Profile-local Wi-Fi scan list. No default-profile fallback. */
+    public static File wifiScanFile(String pkg) {
+        bindGuestProfile();
+        if (TextUtils.isEmpty(pkg)) return null;
+        return path(profileKey(), pkg, "", "wifi_scan.json");
+    }
+
     public static AppSpoofConfig getSpoofConfig(String pkg) {
         bindGuestProfile();
         if (TextUtils.isEmpty(pkg)) return AppSpoofConfig.fromFile(null);

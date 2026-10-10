@@ -18,6 +18,7 @@ import top.niunaijun.blackbox.fake.frameworks.BLocationManager;
 import top.niunaijun.blackbox.fake.hook.BinderInvocationStub;
 import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
+import top.niunaijun.blackbox.utils.GuestFingerprint;
 import top.niunaijun.blackbox.utils.Md5Utils;
 
 
@@ -48,9 +49,17 @@ public class ITelephonyManagerProxy extends BinderInvocationStub {
     public static class GetDeviceId extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            String imei = spoofedImei(args);
+            return imei != null ? imei : Md5Utils.md5(BlackBoxCore.getHostPkg());
+        }
+    }
 
-
-            return Md5Utils.md5(BlackBoxCore.getHostPkg());
+    @ProxyMethod("getImei")
+    public static class GetImei extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            String imei = spoofedImei(args);
+            return imei != null ? imei : Md5Utils.md5(BlackBoxCore.getHostPkg());
         }
     }
 
@@ -58,9 +67,8 @@ public class ITelephonyManagerProxy extends BinderInvocationStub {
     public static class getImeiForSlot extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-
-
-            return Md5Utils.md5(BlackBoxCore.getHostPkg());
+            String imei = spoofedImei(args);
+            return imei != null ? imei : Md5Utils.md5(BlackBoxCore.getHostPkg());
         }
     }
 
@@ -68,8 +76,8 @@ public class ITelephonyManagerProxy extends BinderInvocationStub {
     public static class GetMeidForSlot extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-
-
+            GuestFingerprint fp = GuestFingerprint.get();
+            if (fp.active && fp.imei0.length() > 0) return fp.imei0;
             return Md5Utils.md5(BlackBoxCore.getHostPkg());
         }
     }
@@ -87,6 +95,8 @@ public class ITelephonyManagerProxy extends BinderInvocationStub {
     public static class getLine1NumberForDisplay extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            GuestFingerprint fp = GuestFingerprint.get();
+            if (fp.active && fp.line1.length() > 0) return fp.line1;
             return null;
         }
     }
@@ -95,6 +105,18 @@ public class ITelephonyManagerProxy extends BinderInvocationStub {
     public static class GetSubscriberId extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            GuestFingerprint fp = GuestFingerprint.get();
+            if (fp.active && fp.imsi.length() > 0) return fp.imsi;
+            return Md5Utils.md5(BlackBoxCore.getHostPkg());
+        }
+    }
+
+    @ProxyMethod("getSubscriberIdForSubscriber")
+    public static class GetSubscriberIdForSubscriber extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            GuestFingerprint fp = GuestFingerprint.get();
+            if (fp.active && fp.imsi.length() > 0) return fp.imsi;
             return Md5Utils.md5(BlackBoxCore.getHostPkg());
         }
     }
@@ -103,7 +125,8 @@ public class ITelephonyManagerProxy extends BinderInvocationStub {
     public static class GetDeviceIdWithFeature extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            return Md5Utils.md5(BlackBoxCore.getHostPkg());
+            String imei = spoofedImei(args);
+            return imei != null ? imei : Md5Utils.md5(BlackBoxCore.getHostPkg());
         }
     }
 
@@ -173,5 +196,12 @@ public class ITelephonyManagerProxy extends BinderInvocationStub {
             }
             return method.invoke(who, args);
         }
+    }
+
+    private static String spoofedImei(Object[] args) {
+        GuestFingerprint fp = GuestFingerprint.get();
+        if (!fp.active) return null;
+        String imei = fp.imei(GuestFingerprint.slot(args));
+        return imei.length() == 0 ? null : imei;
     }
 }

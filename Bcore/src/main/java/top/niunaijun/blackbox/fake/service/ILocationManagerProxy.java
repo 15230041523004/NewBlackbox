@@ -54,20 +54,108 @@ public class ILocationManagerProxy extends BinderInvocationStub {
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        if (isLocationRead(method.getName())) {
+            Object spoofed = spoofedLocationResult(method, args);
+            if (spoofed != NO_SPOOF) return spoofed;
+        }
         MethodParameterUtils.replaceFirstAppPkg(args);
         top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
-        
+
         String packageName = BActivityThread.getAppPackageName();
         if (packageName != null && packageName.equals("com.google.android.gms")) {
-            if (method.getName().equals("getLastLocation") || 
+            if (method.getName().equals("getLastLocation") ||
                 method.getName().equals("getLastKnownLocation") ||
                 method.getName().equals("requestLocationUpdates")) {
                 Log.w(TAG, "Blocking location request from Google Play Services to prevent crash");
                 return null;
             }
         }
-        
+
         return super.invoke(proxy, method, args);
+    }
+
+    private static final Object NO_SPOOF = new Object();
+
+    private static boolean isLocationRead(String name) {
+        return "getLastLocation".equals(name)
+                || "getLastKnownLocation".equals(name)
+                || "getCurrentLocation".equals(name)
+                || "requestLocationUpdates".equals(name)
+                || "registerLocationListener".equals(name);
+    }
+
+    /** Client package from the request, before it is rewritten to the host package. */
+    private static String clientPackage(Object[] args) {
+        if (args != null) {
+            for (Object arg : args) {
+                if (arg == null || !arg.getClass().getName().contains("AttributionSource")) continue;
+                String name = attributionPackage(arg);
+                if (isGuestPackage(name)) return name;
+            }
+            for (Object arg : args) {
+                if (arg instanceof String && isGuestPackage((String) arg)) return (String) arg;
+            }
+        }
+        String process = BActivityThread.getAppPackageName();
+        return isGuestPackage(process) ? process : null;
+    }
+
+    private static String attributionPackage(Object attributionSource) {
+        try {
+            Method getter = attributionSource.getClass().getMethod("getPackageName");
+            Object name = getter.invoke(attributionSource);
+            return name instanceof String ? (String) name : null;
+        } catch (Throwable ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isGuestPackage(String name) {
+        if (name == null || !name.contains(".") || name.contains(" ") || name.contains("/")) return false;
+        String host = BlackBoxCore.getHostPkg();
+        return host == null || !host.equals(name);
+    }
+
+    private static Object spoofedLocationResult(Method method, Object[] args) {
+        String pkg = clientPackage(args);
+        if (pkg == null) return NO_SPOOF;
+        int userId = BActivityThread.getUserId();
+        if (BLocationManager.get().getPattern(userId, pkg) == BLocationManager.CLOSE_MODE) return NO_SPOOF;
+        BLocation loc = BLocationManager.get().getLocation(userId, pkg);
+        if (loc == null || loc.isEmpty()) return NO_SPOOF;
+        String name = method.getName();
+        if (name.startsWith("request") || name.startsWith("register") || "getCurrentLocation".equals(name)) {
+            IBinder listener = listenerBinder(args);
+            if (listener != null) {
+                BLocationManager.get().requestLocationUpdates(listener, pkg);
+            }
+            if (args != null) {
+                Location fix = loc.convert2SystemLocation();
+                for (Object arg : args) {
+                    if (arg != null && !(arg instanceof String) && !(arg instanceof Number) && !(arg instanceof Boolean)) {
+                        notifyListener(arg, fix);
+                    }
+                }
+            }
+            Class<?> type = method.getReturnType();
+            if (type == boolean.class || type == Boolean.class) return Boolean.TRUE;
+            if (type == int.class || type == Integer.class) return 0;
+            if (Location.class.isAssignableFrom(type)) return loc.convert2SystemLocation();
+            return null;
+        }
+        if (Location.class.isAssignableFrom(method.getReturnType()) || method.getReturnType() == Object.class) {
+            return loc.convert2SystemLocation();
+        }
+        return NO_SPOOF;
+    }
+
+    private static IBinder listenerBinder(Object[] args) {
+        if (args == null) return null;
+        for (Object arg : args) {
+            if (arg instanceof IBinder) return (IBinder) arg;
+            if (arg instanceof IInterface) return ((IInterface) arg).asBinder();
+        }
+        return null;
     }
 
     @ProxyMethod("registerGnssStatusCallback")
@@ -83,7 +171,8 @@ public class ILocationManagerProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             if (BLocationManager.isFakeLocationEnable()) {
-                return BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName()).convert2SystemLocation();
+                BLocation loc = BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName());
+                if (loc != null) return loc.convert2SystemLocation();
             }
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);
@@ -102,7 +191,8 @@ public class ILocationManagerProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             if (BLocationManager.isFakeLocationEnable()) {
-                return BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName()).convert2SystemLocation();
+                BLocation loc = BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName());
+                if (loc != null) return loc.convert2SystemLocation();
             }
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);
@@ -121,7 +211,8 @@ public class ILocationManagerProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             if (BLocationManager.isFakeLocationEnable()) {
-                return BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName()).convert2SystemLocation();
+                BLocation loc = BLocationManager.get().getLocation(BActivityThread.getUserId(), BActivityThread.getAppPackageName());
+                if (loc != null) return loc.convert2SystemLocation();
             }
             top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
             MethodParameterUtils.replaceFirstAppPkg(args);

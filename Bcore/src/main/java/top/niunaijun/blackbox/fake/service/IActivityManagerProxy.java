@@ -648,6 +648,11 @@ public class IActivityManagerProxy extends ClassInvocationStub {
 
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            if (args != null) {
+                for (Object arg : args) {
+                    if (arg instanceof IInterface) GuestWifiListeners.removeReceiver(arg);
+                }
+            }
             return method.invoke(who, args);
         }
     }
@@ -702,6 +707,9 @@ public class IActivityManagerProxy extends ClassInvocationStub {
             int receiverIndex = getReceiverIndex();
             if (args[receiverIndex] != null) {
                 IIntentReceiver intentReceiver = (IIntentReceiver) args[receiverIndex];
+                if (GuestWifiListeners.wantsScan(args)) {
+                    GuestWifiListeners.addReceiver(intentReceiver);
+                }
                 IIntentReceiver proxy = InnerReceiverDelegate.createProxy(intentReceiver);
 
                 WeakReference<?> weakReference = BRLoadedApkReceiverDispatcherInnerReceiver.get(intentReceiver).mDispatcher();
@@ -757,6 +765,9 @@ public class IActivityManagerProxy extends ClassInvocationStub {
             int receiverIndex = 2;
             if (args[receiverIndex] != null) {
                 IIntentReceiver intentReceiver = (IIntentReceiver) args[receiverIndex];
+                if (GuestWifiListeners.wantsScan(args)) {
+                    GuestWifiListeners.addReceiver(intentReceiver);
+                }
                 IIntentReceiver proxy = InnerReceiverDelegate.createProxy(intentReceiver);
 
                 WeakReference<?> weakReference = BRLoadedApkReceiverDispatcherInnerReceiver.get(intentReceiver).mDispatcher();

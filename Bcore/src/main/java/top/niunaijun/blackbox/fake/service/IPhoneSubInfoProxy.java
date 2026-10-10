@@ -4,6 +4,7 @@ import java.lang.reflect.Method;
 
 import black.android.telephony.BRTelephonyManager;
 import top.niunaijun.blackbox.fake.hook.ClassInvocationStub;
+import top.niunaijun.blackbox.utils.GuestFingerprint;
 import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
 import top.niunaijun.blackbox.utils.MethodParameterUtils;
@@ -47,6 +48,8 @@ public class IPhoneSubInfoProxy extends ClassInvocationStub {
     public static class getLine1NumberForSubscriber extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            GuestFingerprint fp = GuestFingerprint.get();
+            if (fp.active && fp.line1.length() > 0) return fp.line1;
             return null;
         }
     }

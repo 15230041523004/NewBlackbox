@@ -9,6 +9,7 @@ import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.fake.hook.BinderInvocationStub;
 import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
+import top.niunaijun.blackbox.utils.GuestFingerprint;
 import top.niunaijun.blackbox.utils.Md5Utils;
 
 
@@ -37,8 +38,8 @@ public class IDeviceIdentifiersPolicyProxy extends BinderInvocationStub {
     public static class x extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-
-
+            GuestFingerprint fp = GuestFingerprint.get();
+            if (fp.active && fp.serial.length() > 0) return fp.serial;
             return Md5Utils.md5(BlackBoxCore.getHostPkg());
         }
     }

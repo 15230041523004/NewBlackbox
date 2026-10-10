@@ -47,6 +47,8 @@ public class ContentProviderStub extends ClassInvocationStub implements BContent
 
         String methodName = method.getName();
         if ("call".equals(methodName)) {
+            Object fingerprint = top.niunaijun.blackbox.utils.GuestFingerprint.interceptSettingsCall(args);
+            if (fingerprint != null) return fingerprint;
             Object debugResult = top.niunaijun.blackbox.utils.DebugStatePolicy.interceptSettingsCall(args);
             if (debugResult != top.niunaijun.blackbox.utils.DebugStatePolicy.UNHANDLED) return debugResult;
         }

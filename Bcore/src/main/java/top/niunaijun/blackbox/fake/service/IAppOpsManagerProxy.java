@@ -1,6 +1,7 @@
 package top.niunaijun.blackbox.fake.service;
 
 import android.app.AppOpsManager;
+import android.app.SyncNotedAppOp;
 import android.content.Context;
 import android.os.IBinder;
 
@@ -47,33 +48,99 @@ public class IAppOpsManagerProxy extends BinderInvocationStub {
         
         
         
-        if (methodName.startsWith("check") || 
-            methodName.startsWith("note") || 
+        if (methodName.startsWith("check") ||
+            methodName.startsWith("note") ||
             methodName.startsWith("start")) {
             Slog.d(TAG, "AppOps invoke: Bypassing system for " + methodName + ", allowing operation");
-            return AppOpsManager.MODE_ALLOWED;
+            return allowedResult(method, args);
         }
-        
-        
+
         if (methodName.startsWith("finish")) {
             Slog.d(TAG, "AppOps invoke: Bypassing system for " + methodName);
             return null;
         }
-        
-        
+
         try {
             MethodParameterUtils.replaceFirstAppPkg(args);
             MethodParameterUtils.replaceLastUid(args);
             return super.invoke(proxy, method, args);
         } catch (SecurityException e) {
-            
             Slog.w(TAG, "AppOps invoke: SecurityException caught for " + methodName + ", allowing operation", e);
-            return AppOpsManager.MODE_ALLOWED;
+            return allowedResult(method, args);
         } catch (Exception e) {
             Slog.e(TAG, "AppOps invoke: Error in method " + methodName, e);
-            
-            return AppOpsManager.MODE_ALLOWED;
+            return allowedResult(method, args);
         }
+    }
+
+    /** Matches the binder return type. An int where SyncNotedAppOp is required kills the guest. */
+    private static Object allowedResult(Method method, Object[] args) {
+        Class<?> type = method.getReturnType();
+        if (type == void.class || type == Void.class) return null;
+        if (type == int.class || type == Integer.class) return AppOpsManager.MODE_ALLOWED;
+        if (type == boolean.class || type == Boolean.class) return Boolean.FALSE;
+        if ("android.app.SyncNotedAppOp".equals(type.getName())) return allowedNote(args);
+        return null;
+    }
+
+    /**
+     * The public constructor forces MODE_IGNORED. The hidden one carries MODE_ALLOWED,
+     * which is what startOpNoThrow reads back through getOpMode().
+     */
+    private static SyncNotedAppOp allowedNote(Object[] args) {
+        int opCode = opCodeFrom(args);
+        String packageName = packageFrom(args);
+        try {
+            java.lang.reflect.Constructor<SyncNotedAppOp> full = SyncNotedAppOp.class.getDeclaredConstructor(
+                    int.class, int.class, String.class, String.class);
+            full.setAccessible(true);
+            return full.newInstance(AppOpsManager.MODE_ALLOWED, opCode, null, packageName);
+        } catch (Throwable hidden) {
+            Slog.w(TAG, "AppOps full SyncNotedAppOp constructor was not used: " + hidden.getMessage());
+        }
+        try {
+            SyncNotedAppOp note = new SyncNotedAppOp(opCode, null);
+            java.lang.reflect.Field mode = SyncNotedAppOp.class.getDeclaredField("mOpMode");
+            mode.setAccessible(true);
+            mode.setInt(note, AppOpsManager.MODE_ALLOWED);
+            return note;
+        } catch (Throwable t) {
+            Slog.e(TAG, "AppOps SyncNotedAppOp was not created: " + t.getMessage());
+            if (t instanceof RuntimeException) throw (RuntimeException) t;
+            throw new RuntimeException(t);
+        }
+    }
+
+    private static int opCodeFrom(Object[] args) {
+        if (args != null) {
+            for (Object arg : args) {
+                if (arg instanceof Integer) {
+                    int value = (Integer) arg;
+                    if (value >= 0 && value < 200) return value;
+                }
+            }
+        }
+        return 0;
+    }
+
+    private static String packageFrom(Object[] args) {
+        String plain = null;
+        if (args != null) {
+            for (Object arg : args) {
+                if (!(arg instanceof String)) continue;
+                String value = (String) arg;
+                if (value.isEmpty()) continue;
+                if (value.indexOf('.') > 0) return value;
+                if (plain == null) plain = value;
+            }
+        }
+        if (plain != null) return plain;
+        try {
+            String host = BlackBoxCore.getHostPkg();
+            if (host != null && !host.isEmpty()) return host;
+        } catch (Throwable ignored) {
+        }
+        return "android";
     }
 
     @Override

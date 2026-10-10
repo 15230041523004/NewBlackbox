@@ -30,6 +30,8 @@ public final class SettingsProviderStub extends SystemProviderStub {
 
     @Override public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         if ("call".equals(method.getName())) {
+            Object fingerprint = top.niunaijun.blackbox.utils.GuestFingerprint.interceptSettingsCall(args);
+            if (fingerprint != null) return fingerprint;
             Object result = DebugStatePolicy.interceptSettingsCall(args, true);
             if (result != DebugStatePolicy.UNHANDLED) return result;
         }

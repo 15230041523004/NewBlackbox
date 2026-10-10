@@ -173,8 +173,13 @@ public class BLocationManager extends BlackManager<IBLocationManagerService> {
     }
 
     public void requestLocationUpdates(IBinder listener) {
+        requestLocationUpdates(listener, BActivityThread.getAppPackageName());
+    }
+
+    public void requestLocationUpdates(IBinder listener, String packageName) {
         try {
-            getService().requestLocationUpdates(listener, BActivityThread.getAppPackageName(), BActivityThread.getUserId());
+            String pkg = packageName == null ? BActivityThread.getAppPackageName() : packageName;
+            getService().requestLocationUpdates(listener, pkg, BActivityThread.getUserId());
         } catch (RemoteException e) {
             e.printStackTrace();
         }
