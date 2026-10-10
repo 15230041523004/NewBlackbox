@@ -82,7 +82,12 @@ public final class SpoofHookInstaller {
 
     private static void installNativeMic(String pkg) {
         try {
+            NeuralVoiceBridge.setPkg(pkg);
             AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
+            NeuralVoiceBridge.setCurrentProfile(config.micProfile);
+            if ("neural".equals(config.micMode)) {
+                initNeuralEngine(pkg);
+            }
             VirtualMicProxy.ensurePcm();
             File mic = VirtualResourceManager.getMicFile(pkg, "audio.wav");
             String path = mic == null ? "" : mic.getAbsolutePath();
@@ -97,6 +102,93 @@ public final class SpoofHookInstaller {
                     + " bytes=" + (pcm == null ? 0 : pcm.length) + " " + path);
         } catch (Throwable t) {
             Slog.w(TAG, "native mic tap failed: " + t.getMessage());
+        }
+    }
+
+    private static void initNeuralEngine(String pkg) {
+        try {
+            if (NeuralVoiceBridge.getEngine() != null) return;
+            Class<?> engineClass = Class.forName("com.blacktwin.voice.StreamingVoiceEngine");
+            Object engine = engineClass.newInstance();
+            Class<?> managerClass = Class.forName("com.blacktwin.voice.VoicePackManager");
+            Object manager = null;
+            try {
+                manager = managerClass.getConstructor(android.content.Context.class)
+                        .newInstance(top.niunaijun.blackbox.BlackBoxCore.get().getContext());
+            } catch (NoSuchMethodException e) {
+                for (java.lang.reflect.Constructor<?> c : managerClass.getConstructors()) {
+                    if (c.getParameterTypes().length >= 1 && c.getParameterTypes()[0] == android.content.Context.class) {
+                        Object[] args = new Object[c.getParameterTypes().length];
+                        args[0] = top.niunaijun.blackbox.BlackBoxCore.get().getContext();
+                        manager = c.newInstance(args);
+                        break;
+                    }
+                }
+            }
+            if (manager == null) {
+                Slog.w(TAG, "Failed to instantiate VoicePackManager for " + pkg);
+                return;
+            }
+
+            Object activePack = managerClass.getMethod("getActivePack").invoke(manager);
+            if (activePack == null) {
+                File tmpPack = new File("/data/local/tmp/voice-pack-meanvc2-1.0.0.zip");
+                if (tmpPack.exists()) {
+                    Slog.i(TAG, "Installing voice pack from " + tmpPack.getAbsolutePath());
+                    try {
+                        Method installMethod = managerClass.getMethod("installPackDirect", File.class);
+                        activePack = installMethod.invoke(manager, tmpPack);
+                    } catch (Throwable it) {
+                        Slog.w(TAG, "installPackDirect failed: " + it.getMessage());
+                    }
+                    if (activePack == null) {
+                        try {
+                            activePack = managerClass.getMethod("getActivePack").invoke(manager);
+                        } catch (Throwable ignored) {}
+                    }
+                }
+            }
+
+            if (activePack != null) {
+                AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
+                String targetVoice = "child_01";
+                if ("female".equals(config.micProfile)) {
+                    targetVoice = "female_01";
+                } else if ("deep".equals(config.micProfile)) {
+                    targetVoice = "deep_01";
+                } else if ("child".equals(config.micProfile)) {
+                    targetVoice = "child_01";
+                } else if (config.micProfile != null && !config.micProfile.isEmpty()) {
+                    targetVoice = config.micProfile;
+                }
+
+                Class<?> configClass = Class.forName("com.blacktwin.voice.EngineConfig");
+                Class<?> backendClass = Class.forName("com.blacktwin.voice.Backend");
+                Class<?> underrunClass = Class.forName("com.blacktwin.voice.UnderrunPolicy");
+                Object silencePolicy = Enum.valueOf((Class<Enum>) underrunClass, "SILENCE");
+                Object engineConfig = configClass.getConstructor(
+                        String.class, String.class, String.class, int.class, int.class, int.class,
+                        backendClass, int.class, underrunClass, boolean.class
+                ).newInstance("", "", targetVoice, 48000, 48000, 640, null, 4, silencePolicy, true);
+                Method loadPack = engineClass.getMethod("loadPack", activePack.getClass(), configClass);
+                boolean ok = (Boolean) loadPack.invoke(engine, activePack, engineConfig);
+                if (ok) {
+                    try {
+                        Method selectVoice = engineClass.getMethod("selectVoice", String.class);
+                        selectVoice.invoke(engine, targetVoice);
+                    } catch (Throwable ignored) {}
+                    Method warmup = engineClass.getMethod("warmup", int.class);
+                    warmup.invoke(engine, 3);
+                    NeuralVoiceBridge.setEngine(engine);
+                    Slog.i(TAG, "NeuralVoiceEngine attached to NeuralVoiceBridge for " + pkg + " with voice=" + targetVoice);
+                } else {
+                    Slog.w(TAG, "engine.loadPack failed for " + pkg);
+                }
+            } else {
+                Slog.w(TAG, "activePack is null for " + pkg);
+            }
+        } catch (Throwable t) {
+            Slog.w(TAG, "initNeuralEngine failed: " + t.getMessage(), t);
         }
     }
 
@@ -872,7 +964,7 @@ final class SpoofBridges {
 
     private static boolean liveMicDsp() {
         AppSpoofConfig config = SpoofHookInstaller.sConfig;
-        return config != null && !config.grantMic && "dsp".equals(config.micMode);
+        return config != null && !config.grantMic && ("dsp".equals(config.micMode) || "neural".equals(config.micMode));
     }
 
     private static int sampleRate(Object self) {

@@ -18,6 +18,7 @@
 
 #include "Dobby/dobby.h"
 #include "xdl.h"
+#include "BoxCore.h"
 
 #define SPOOF_AUDIO_LOG(...) __android_log_print(ANDROID_LOG_INFO, "SpoofAudio", __VA_ARGS__)
 
@@ -28,9 +29,16 @@ struct CbBox {
     void *user;
 };
 
-enum MicMode : int { MODE_FILE = 0, MODE_BYPASS = 1, MODE_DSP = 2, MODE_SILENCE = 3 };
+enum MicMode : int { MODE_FILE = 0, MODE_BYPASS = 1, MODE_DSP = 2, MODE_SILENCE = 3, MODE_NEURAL = 4 };
 constexpr uint32_t kQueueSlots = 16;
 constexpr uint32_t kMaxSamples = 4096;
+
+jobject g_direct_in = nullptr;
+jobject g_direct_out = nullptr;
+jclass g_bridge_class = nullptr;
+jmethodID g_bridge_process = nullptr;
+std::array<float, kMaxSamples> g_neural_in{};
+std::array<float, kMaxSamples> g_neural_out{};
 
 struct AudioFrame {
     uint64_t sequence = 0;
@@ -168,7 +176,7 @@ void ApplyDsp(AudioFrame &frame) {
     float pitch = g_pitch.load(std::memory_order_relaxed);
     float formant = g_formant.load(std::memory_order_relaxed);
     float gain = g_input_gain.load(std::memory_order_relaxed);
-    if (profile == 1) { pitch = 8.0f; formant = 0.45f; }
+    if (profile == 1) { pitch = 4.0f; formant = 0.15f; }  // child: gentler shift avoids OLA glitch
     else if (profile == 2) { pitch = -6.0f; formant = -0.35f; }
     else if (profile == 3) { pitch = 0.0f; formant = 0.0f; }
     const float ratio = std::pow(2.0f, pitch / 12.0f);
@@ -227,6 +235,36 @@ void ApplyDsp(AudioFrame &frame) {
     g_robot_phase = robot_phase;
 }
 
+void ApplyNeuralVc(AudioFrame &frame) {
+    if (g_bridge_class == nullptr || g_bridge_process == nullptr
+            || g_direct_in == nullptr || g_direct_out == nullptr) {
+        return;
+    }
+    JavaVM *vm = BoxCore::getJavaVM();
+    if (vm == nullptr) {
+        return;
+    }
+    JNIEnv *env = nullptr;
+    if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || env == nullptr) {
+            return;
+        }
+    }
+    const int count = frame.frames * frame.channels;
+    if (count <= 0 || count > static_cast<int>(kMaxSamples)) {
+        return;
+    }
+    std::copy_n(frame.samples.begin(), count, g_neural_in.begin());
+    env->CallStaticVoidMethod(g_bridge_class, g_bridge_process,
+                              g_direct_in, g_direct_out,
+                              frame.frames, frame.channels, frame.sample_rate);
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return;
+    }
+    std::copy_n(g_neural_out.begin(), count, frame.samples.begin());
+}
+
 void *VoiceWorker(void *) {
     AudioFrame frame;
     while (g_worker_running.load(std::memory_order_acquire)) {
@@ -235,7 +273,16 @@ void *VoiceWorker(void *) {
             continue;
         }
         int64_t started = MonotonicNs();
-        ApplyDsp(frame);
+        const int mode = g_mode.load(std::memory_order_relaxed);
+        if (mode == MODE_NEURAL) {
+            if (g_bridge_class != nullptr && g_bridge_process != nullptr) {
+                ApplyNeuralVc(frame);
+            } else {
+                ApplyDsp(frame);
+            }
+        } else {
+            ApplyDsp(frame);
+        }
         uint64_t elapsed = static_cast<uint64_t>(MonotonicNs() - started);
         g_processed_frames.fetch_add(static_cast<uint64_t>(frame.frames), std::memory_order_relaxed);
         g_processed_blocks.fetch_add(1, std::memory_order_relaxed);
@@ -286,7 +333,8 @@ void *DiagnosticsWorker(void *) {
 }
 
 void StartWorker() {
-    if (g_mode.load(std::memory_order_acquire) != MODE_DSP) return;
+    const int mode = g_mode.load(std::memory_order_acquire);
+    if (mode != MODE_DSP && mode != MODE_NEURAL) return;
     int expected = 0;
     if (!g_worker_running.compare_exchange_strong(expected, 1)) return;
     if (pthread_create(&g_worker, nullptr, VoiceWorker, nullptr) != 0) {
@@ -453,7 +501,7 @@ ssize_t HandleAudioRead(AudioRead original, void *self, void *buffer, size_t siz
     }
     if (original == nullptr) return -1;
     ssize_t result = original(self, buffer, size, blocking);
-    if (mode == MODE_DSP && result > 1) {
+    if ((mode == MODE_DSP || mode == MODE_NEURAL) && result > 1) {
         ProcessLive(buffer, static_cast<int>(result / sizeof(int16_t)), 1, false, 48000);
         g_last_native_dsp_ns = MonotonicNs();
     }
@@ -518,7 +566,7 @@ int32_t SpoofAAudioRead(void *stream, void *buffer, int32_t frames, int64_t time
     }
     if (g_orig_aaudio_read == nullptr) return -2;
     int32_t result = g_orig_aaudio_read(stream, buffer, frames, timeout);
-    if (mode == MODE_DSP && result > 0) {
+    if ((mode == MODE_DSP || mode == MODE_NEURAL) && result > 0) {
         int rate = g_sample_rate != nullptr ? g_sample_rate(stream) : 48000;
         ProcessLive(buffer, result, channels, format == 2, rate);
         g_last_native_dsp_ns = MonotonicNs();
@@ -537,7 +585,7 @@ int32_t SpoofDataCallback(void *stream, void *user_data, void *audio, int32_t fr
         else if (mode == MODE_SILENCE) {
             memset(audio, 0, static_cast<size_t>(frames) * channels
                     * (format == 2 ? sizeof(float) : sizeof(int16_t)));
-        } else if (mode == MODE_DSP) {
+        } else if (mode == MODE_DSP || mode == MODE_NEURAL) {
             int rate = g_sample_rate != nullptr ? g_sample_rate(stream) : 48000;
             ProcessLive(audio, frames, channels, format == 2, rate);
         }
@@ -615,8 +663,24 @@ jboolean enableMicTap(JNIEnv *env, jclass, jstring path, jbyteArray pcm, jint ra
     if (g_samples.empty() && !g_path.empty()) LoadWav(g_path.c_str());
     if (g_samples.empty()) SPOOF_AUDIO_LOG("no pcm, microphone reads stay silent");
 
-    g_mode.store(mode >= MODE_FILE && mode <= MODE_SILENCE ? mode : MODE_FILE,
+    g_mode.store(mode >= MODE_FILE && mode <= MODE_NEURAL ? mode : MODE_FILE,
                  std::memory_order_release);
+    if (mode == MODE_NEURAL && g_bridge_class == nullptr) {
+        jclass cls = env->FindClass("top/niunaijun/blackbox/fake/service/NeuralVoiceBridge");
+        if (cls != nullptr) {
+            g_bridge_class = (jclass) env->NewGlobalRef(cls);
+            g_bridge_process = env->GetStaticMethodID(g_bridge_class, "processFrame",
+                                                      "(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;III)V");
+            jobject buf_in = env->NewDirectByteBuffer(g_neural_in.data(), kMaxSamples * sizeof(float));
+            jobject buf_out = env->NewDirectByteBuffer(g_neural_out.data(), kMaxSamples * sizeof(float));
+            if (buf_in != nullptr) g_direct_in = env->NewGlobalRef(buf_in);
+            if (buf_out != nullptr) g_direct_out = env->NewGlobalRef(buf_out);
+            SPOOF_AUDIO_LOG("NeuralVoiceBridge JNI initialized");
+        } else {
+            env->ExceptionClear();
+            SPOOF_AUDIO_LOG("NeuralVoiceBridge class not found");
+        }
+    }
     g_profile.store(profile >= 0 && profile <= 3 ? profile : 0, std::memory_order_release);
     g_input_gain.store(std::max(0.0f, std::min(4.0f, input_gain)), std::memory_order_release);
     g_pitch.store(std::max(-12.0f, std::min(12.0f, pitch_semitones)), std::memory_order_release);

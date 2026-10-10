@@ -85,10 +85,13 @@ public class AppSpoofConfig {
         return "file".equals(micMode);
     }
 
+    public static final String MIC_MODE_NEURAL = "neural";
+
     public int nativeMicMode() {
         if ("bypass".equals(micMode)) return 1;
         if ("dsp".equals(micMode)) return 2;
         if ("silence".equals(micMode)) return 3;
+        if ("neural".equals(micMode)) return 4;
         return 0;
     }
 
@@ -105,7 +108,7 @@ public class AppSpoofConfig {
     }
 
     private static String normalizeMode(String value) {
-        return "bypass".equals(value) || "dsp".equals(value) || "silence".equals(value)
+        return "bypass".equals(value) || "dsp".equals(value) || "silence".equals(value) || "neural".equals(value)
                 ? value : "file";
     }
 
