@@ -119,9 +119,11 @@ public final class NeuralVoiceBridge {
 
             if (profileChanged && newProfile != null) {
                 String targetVoice = "female_01";
-                if ("child".equals(newProfile)) {
+                if ("female".equals(newProfile) || "female_01".equals(newProfile)) {
+                    targetVoice = "female_01";
+                } else if ("child".equals(newProfile) || "child_01".equals(newProfile)) {
                     targetVoice = "child_01";
-                } else if ("deep".equals(newProfile)) {
+                } else if ("deep".equals(newProfile) || "deep_01".equals(newProfile)) {
                     targetVoice = "deep_01";
                 } else if (!newProfile.isEmpty()) {
                     targetVoice = newProfile;
