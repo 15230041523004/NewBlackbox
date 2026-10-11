@@ -60,7 +60,7 @@ public class VirtualSensorProxy extends ClassInvocationStub {
         }
         SensorScenario scenario = VirtualResourceManager.scenarioOrStationary(pkg);
         if (handler == null) handler = new Handler(Looper.getMainLooper());
-        VirtualSensorEmitter emitter = new VirtualSensorEmitter(listener, sensor, scenario, handler);
+        VirtualSensorEmitter emitter = new VirtualSensorEmitter(listener, sensor, pkg, scenario, handler);
         List<VirtualSensorEmitter> list = sEmitters.get(listener);
         if (list == null) {
             list = Collections.synchronizedList(new ArrayList<VirtualSensorEmitter>());

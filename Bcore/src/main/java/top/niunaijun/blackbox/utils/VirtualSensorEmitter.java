@@ -23,21 +23,25 @@ public class VirtualSensorEmitter implements Runnable {
 
     private final SensorEventListener listener;
     private final Sensor sensor;
-    private final SensorScenario scenario;
+    private final String pkg;
+    private volatile SensorScenario scenario;
     private final Handler handler;
     private volatile boolean running = false;
     private long stepCount;
     private double phase = 0;
+    private int tickCount = 0;
 
     public VirtualSensorEmitter(SensorEventListener listener,
                                  Sensor sensor,
+                                 String pkg,
                                  SensorScenario scenario,
                                  Handler handler) {
         this.listener  = listener;
         this.sensor    = sensor;
+        this.pkg       = pkg;
         this.scenario  = scenario;
         this.handler   = handler;
-        this.stepCount = scenario.initialStepCount;
+        this.stepCount = scenario != null ? scenario.initialStepCount : 0;
     }
 
     public void start() {
@@ -69,6 +73,13 @@ public class VirtualSensorEmitter implements Runnable {
         SensorEvent event = createEvent();
         if (event == null) return;
 
+        if ((++tickCount & 15) == 0 && pkg != null) {
+            this.scenario = VirtualResourceManager.scenarioOrStationary(pkg);
+        }
+
+        SensorScenario sc = this.scenario;
+        String mode = sc != null && sc.motionMode != null ? sc.motionMode : "stationary";
+
         int type = sensor.getType();
         phase += 0.1;
 
@@ -76,7 +87,7 @@ public class VirtualSensorEmitter implements Runnable {
         float ax = 0, ay = 0, az = SensorManager.GRAVITY_EARTH;
         float gx = 0, gy = 0, gz = 0;
 
-        switch (scenario.motionMode) {
+        switch (mode) {
             case "walking":
                 ax = (float) (0.5 * Math.sin(phase));
                 ay = (float) (0.3 * Math.cos(phase * 1.1));
