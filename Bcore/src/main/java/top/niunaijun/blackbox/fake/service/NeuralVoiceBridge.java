@@ -76,10 +76,12 @@ public final class NeuralVoiceBridge {
         }
     }
 
-    /**
-     * Checks if the user changed the spoof voice profile in BlackTwin settings.
-     * Automatically applies the change to the running engine with smooth crossfading.
-     */
+    private static volatile String sCurrentMode = null;
+    private static volatile float sCurrentGain = -1.0f;
+    private static volatile float sCurrentPitch = 999.0f;
+    private static volatile float sCurrentFormant = 999.0f;
+    private static volatile boolean sCurrentUnderflowSilence = false;
+
     private static void checkDynamicProfileUpdate() {
         String pkg = sCurrentPkg;
         if (pkg == null || pkg.isEmpty()) {
@@ -90,29 +92,51 @@ public final class NeuralVoiceBridge {
         AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
         if (config == null) return;
 
+        if (sEngineInstance == null && ("neural".equals(config.micMode) || "dsp".equals(config.micMode))) {
+            SpoofHookInstaller.initNeuralEngine(pkg);
+        }
+
         String newProfile = config.micProfile;
-        if (newProfile != null && !newProfile.equals(sCurrentProfile)) {
+        String newMode = config.micMode;
+        float newGain = config.micInputGain;
+        float newPitch = config.micPitchSemitones;
+        float newFormant = config.micFormantShift;
+        boolean newUnderflowSilence = config.micUnderflowSilence;
+
+        boolean profileChanged = newProfile != null && !newProfile.equals(sCurrentProfile);
+        boolean modeChanged = newMode != null && !newMode.equals(sCurrentMode);
+        boolean audioParamsChanged = newGain != sCurrentGain || newPitch != sCurrentPitch
+                || newFormant != sCurrentFormant || newUnderflowSilence != sCurrentUnderflowSilence;
+
+        if (profileChanged || modeChanged || audioParamsChanged) {
             String oldProfile = sCurrentProfile;
             sCurrentProfile = newProfile;
+            sCurrentMode = newMode;
+            sCurrentGain = newGain;
+            sCurrentPitch = newPitch;
+            sCurrentFormant = newFormant;
+            sCurrentUnderflowSilence = newUnderflowSilence;
 
-            String targetVoice = "female_01";
-            if ("child".equals(newProfile)) {
-                targetVoice = "child_01";
-            } else if ("deep".equals(newProfile)) {
-                targetVoice = "deep_01";
-            } else if (!newProfile.isEmpty()) {
-                targetVoice = newProfile;
-            }
+            if (profileChanged && newProfile != null) {
+                String targetVoice = "female_01";
+                if ("child".equals(newProfile)) {
+                    targetVoice = "child_01";
+                } else if ("deep".equals(newProfile)) {
+                    targetVoice = "deep_01";
+                } else if (!newProfile.isEmpty()) {
+                    targetVoice = newProfile;
+                }
 
-            Object engine = sEngineInstance;
-            Method selectMethod = sSelectVoiceMethod;
-            if (engine != null && selectMethod != null) {
-                try {
-                    selectMethod.invoke(engine, targetVoice);
-                    Slog.i(TAG, "Dynamically switched voice profile from " + oldProfile
-                            + " to " + newProfile + " (" + targetVoice + ")");
-                } catch (Throwable t) {
-                    Slog.w(TAG, "Dynamic voice switch failed: " + t.getMessage());
+                Object engine = sEngineInstance;
+                Method selectMethod = sSelectVoiceMethod;
+                if (engine != null && selectMethod != null) {
+                    try {
+                        selectMethod.invoke(engine, targetVoice);
+                        Slog.i(TAG, "Dynamically switched voice profile from " + oldProfile
+                                + " to " + newProfile + " (" + targetVoice + ")");
+                    } catch (Throwable t) {
+                        Slog.w(TAG, "Dynamic voice switch failed: " + t.getMessage());
+                    }
                 }
             }
 
@@ -121,6 +145,8 @@ public final class NeuralVoiceBridge {
                         config.nativeMicMode(), config.nativeMicProfile(),
                         config.micInputGain, config.micPitchSemitones, config.micFormantShift,
                         config.micUnderflowSilence);
+                Slog.i(TAG, "Dynamically updated native mic settings: mode=" + newMode
+                        + " profile=" + newProfile + " gain=" + newGain + " pitch=" + newPitch);
             } catch (Throwable ignored) {}
         }
     }

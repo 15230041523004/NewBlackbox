@@ -85,7 +85,7 @@ public final class SpoofHookInstaller {
             NeuralVoiceBridge.setPkg(pkg);
             AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
             NeuralVoiceBridge.setCurrentProfile(config.micProfile);
-            if ("neural".equals(config.micMode)) {
+            if ("neural".equals(config.micMode) || "dsp".equals(config.micMode)) {
                 initNeuralEngine(pkg);
             }
             VirtualMicProxy.ensurePcm();
@@ -105,7 +105,7 @@ public final class SpoofHookInstaller {
         }
     }
 
-    private static void initNeuralEngine(String pkg) {
+    static void initNeuralEngine(String pkg) {
         try {
             if (NeuralVoiceBridge.getEngine() != null) return;
             Class<?> engineClass = Class.forName("com.blacktwin.voice.StreamingVoiceEngine");

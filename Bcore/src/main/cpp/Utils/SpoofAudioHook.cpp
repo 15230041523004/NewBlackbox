@@ -235,11 +235,25 @@ void ApplyDsp(AudioFrame &frame) {
     g_robot_phase = robot_phase;
 }
 
-void ApplyNeuralVc(AudioFrame &frame) {
-    if (g_bridge_class == nullptr || g_bridge_process == nullptr
-            || g_direct_in == nullptr || g_direct_out == nullptr) {
-        return;
+void InitBridge(JNIEnv *env) {
+    if (g_bridge_class != nullptr) return;
+    jclass cls = env->FindClass("top/niunaijun/blackbox/fake/service/NeuralVoiceBridge");
+    if (cls != nullptr) {
+        g_bridge_class = (jclass) env->NewGlobalRef(cls);
+        g_bridge_process = env->GetStaticMethodID(g_bridge_class, "processFrame",
+                                                  "(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;III)V");
+        jobject buf_in = env->NewDirectByteBuffer(g_neural_in.data(), kMaxSamples * sizeof(float));
+        jobject buf_out = env->NewDirectByteBuffer(g_neural_out.data(), kMaxSamples * sizeof(float));
+        if (buf_in != nullptr) g_direct_in = env->NewGlobalRef(buf_in);
+        if (buf_out != nullptr) g_direct_out = env->NewGlobalRef(buf_out);
+        SPOOF_AUDIO_LOG("NeuralVoiceBridge JNI initialized");
+    } else {
+        env->ExceptionClear();
+        SPOOF_AUDIO_LOG("NeuralVoiceBridge class not found");
     }
+}
+
+void ApplyNeuralVc(AudioFrame &frame) {
     JavaVM *vm = BoxCore::getJavaVM();
     if (vm == nullptr) {
         return;
@@ -249,6 +263,13 @@ void ApplyNeuralVc(AudioFrame &frame) {
         if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || env == nullptr) {
             return;
         }
+    }
+    if (g_bridge_class == nullptr) {
+        InitBridge(env);
+    }
+    if (g_bridge_class == nullptr || g_bridge_process == nullptr
+            || g_direct_in == nullptr || g_direct_out == nullptr) {
+        return;
     }
     const int count = frame.frames * frame.channels;
     if (count <= 0 || count > static_cast<int>(kMaxSamples)) {
@@ -274,14 +295,15 @@ void *VoiceWorker(void *) {
         }
         int64_t started = MonotonicNs();
         const int mode = g_mode.load(std::memory_order_relaxed);
-        if (mode == MODE_NEURAL) {
-            if (g_bridge_class != nullptr && g_bridge_process != nullptr) {
+        if (mode == MODE_NEURAL || mode == MODE_DSP) {
+            ApplyNeuralVc(frame);
+        } else if (mode == MODE_BYPASS) {
+            static uint64_t last_bypass_check = 0;
+            uint64_t now_ns = static_cast<uint64_t>(started);
+            if (now_ns - last_bypass_check > 250000000ULL) {
+                last_bypass_check = now_ns;
                 ApplyNeuralVc(frame);
-            } else {
-                ApplyDsp(frame);
             }
-        } else {
-            ApplyDsp(frame);
         }
         uint64_t elapsed = static_cast<uint64_t>(MonotonicNs() - started);
         g_processed_frames.fetch_add(static_cast<uint64_t>(frame.frames), std::memory_order_relaxed);
@@ -333,8 +355,6 @@ void *DiagnosticsWorker(void *) {
 }
 
 void StartWorker() {
-    const int mode = g_mode.load(std::memory_order_acquire);
-    if (mode != MODE_DSP && mode != MODE_NEURAL) return;
     int expected = 0;
     if (!g_worker_running.compare_exchange_strong(expected, 1)) return;
     if (pthread_create(&g_worker, nullptr, VoiceWorker, nullptr) != 0) {
@@ -654,38 +674,31 @@ void UsePcm(JNIEnv *env, jbyteArray pcm, jint rate, jint channels) {
 jboolean enableMicTap(JNIEnv *env, jclass, jstring path, jbyteArray pcm, jint rate, jint channels,
                       jint mode, jint profile, jfloat input_gain, jfloat pitch_semitones,
                       jfloat formant_shift, jboolean underflow_silence) {
-    if (g_installed) return g_installed > 0 ? JNI_TRUE : JNI_FALSE;
     const char *chars = nullptr;
     if (path != nullptr) chars = env->GetStringUTFChars(path, nullptr);
     if (chars != nullptr && chars[0] != '\0') g_path = chars;
     if (chars != nullptr) env->ReleaseStringUTFChars(path, chars);
     UsePcm(env, pcm, rate, channels);
     if (g_samples.empty() && !g_path.empty()) LoadWav(g_path.c_str());
-    if (g_samples.empty()) SPOOF_AUDIO_LOG("no pcm, microphone reads stay silent");
 
     g_mode.store(mode >= MODE_FILE && mode <= MODE_NEURAL ? mode : MODE_FILE,
                  std::memory_order_release);
-    if (mode == MODE_NEURAL && g_bridge_class == nullptr) {
-        jclass cls = env->FindClass("top/niunaijun/blackbox/fake/service/NeuralVoiceBridge");
-        if (cls != nullptr) {
-            g_bridge_class = (jclass) env->NewGlobalRef(cls);
-            g_bridge_process = env->GetStaticMethodID(g_bridge_class, "processFrame",
-                                                      "(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;III)V");
-            jobject buf_in = env->NewDirectByteBuffer(g_neural_in.data(), kMaxSamples * sizeof(float));
-            jobject buf_out = env->NewDirectByteBuffer(g_neural_out.data(), kMaxSamples * sizeof(float));
-            if (buf_in != nullptr) g_direct_in = env->NewGlobalRef(buf_in);
-            if (buf_out != nullptr) g_direct_out = env->NewGlobalRef(buf_out);
-            SPOOF_AUDIO_LOG("NeuralVoiceBridge JNI initialized");
-        } else {
-            env->ExceptionClear();
-            SPOOF_AUDIO_LOG("NeuralVoiceBridge class not found");
-        }
-    }
+    InitBridge(env);
     g_profile.store(profile >= 0 && profile <= 3 ? profile : 0, std::memory_order_release);
     g_input_gain.store(std::max(0.0f, std::min(4.0f, input_gain)), std::memory_order_release);
     g_pitch.store(std::max(-12.0f, std::min(12.0f, pitch_semitones)), std::memory_order_release);
     g_formant.store(std::max(-1.0f, std::min(1.0f, formant_shift)), std::memory_order_release);
     g_underflow_silence.store(underflow_silence == JNI_TRUE ? 1 : 0, std::memory_order_release);
+
+    StartWorker();
+
+    if (g_installed) {
+        SPOOF_AUDIO_LOG("voice engine updated mode=%d profile=%d gain=%.2f pitch=%.2f formant=%.2f",
+                        g_mode.load(), g_profile.load(), g_input_gain.load(), g_pitch.load(), g_formant.load());
+        return g_installed > 0 ? JNI_TRUE : JNI_FALSE;
+    }
+
+    if (g_samples.empty()) SPOOF_AUDIO_LOG("no pcm, microphone reads stay silent");
 
     g_on.store(1, std::memory_order_release);
     int hooked = 0;
