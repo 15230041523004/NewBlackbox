@@ -105,7 +105,7 @@ public final class SpoofHookInstaller {
         }
     }
 
-    static void initNeuralEngine(String pkg) {
+    public static void initNeuralEngine(String pkg) {
         try {
             if (NeuralVoiceBridge.getEngine() != null) return;
             Class<?> engineClass = Class.forName("com.blacktwin.voice.StreamingVoiceEngine");
@@ -166,10 +166,32 @@ public final class SpoofHookInstaller {
                 Class<?> backendClass = Class.forName("com.blacktwin.voice.Backend");
                 Class<?> underrunClass = Class.forName("com.blacktwin.voice.UnderrunPolicy");
                 Object silencePolicy = Enum.valueOf((Class<Enum>) underrunClass, "SILENCE");
-                Object engineConfig = configClass.getConstructor(
-                        String.class, String.class, String.class, int.class, int.class, int.class,
-                        backendClass, int.class, underrunClass, boolean.class
-                ).newInstance("", "", targetVoice, 48000, 48000, 640, null, 4, silencePolicy, true);
+                Object targetBackendEnum = null;
+                try {
+                    if ("npu".equalsIgnoreCase(config.micBackend)) {
+                        targetBackendEnum = Enum.valueOf((Class<Enum>) backendClass, "LITERT_NPU");
+                    } else if ("gpu".equalsIgnoreCase(config.micBackend)) {
+                        targetBackendEnum = Enum.valueOf((Class<Enum>) backendClass, "LITERT_GPU");
+                    } else if ("cpu".equalsIgnoreCase(config.micBackend)) {
+                        targetBackendEnum = Enum.valueOf((Class<Enum>) backendClass, "LITERT_CPU");
+                    } else {
+                        targetBackendEnum = Enum.valueOf((Class<Enum>) backendClass, "AUTO");
+                    }
+                } catch (Throwable ignored) {}
+
+                Object engineConfig = null;
+                for (java.lang.reflect.Constructor<?> c : configClass.getConstructors()) {
+                    Class<?>[] pTypes = c.getParameterTypes();
+                    if (pTypes.length == 11) {
+                        engineConfig = c.newInstance("", "", targetVoice, 48000, 48000, 640,
+                                targetBackendEnum, targetBackendEnum, 4, silencePolicy, true);
+                        break;
+                    } else if (pTypes.length == 10) {
+                        engineConfig = c.newInstance("", "", targetVoice, 48000, 48000, 640,
+                                targetBackendEnum, 4, silencePolicy, true);
+                        break;
+                    }
+                }
                 Method loadPack = engineClass.getMethod("loadPack", activePack.getClass(), configClass);
                 boolean ok = (Boolean) loadPack.invoke(engine, activePack, engineConfig);
                 if (ok) {
@@ -786,7 +808,10 @@ final class SpoofBridges {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadBytes == null) {
             int read = asInt(bReadBytes, self, buf, off, size);
-            if (liveMicDsp() && read > 0) NativeCore.processMicBytes(buf, off, read, sampleRate(self), channels(self));
+            if (read > 0) {
+                top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.processBytes(
+                        self, buf, off, read, sampleRate(self), channels(self));
+            }
             return read;
         }
         VirtualMicProxy.ensurePcm();
@@ -797,7 +822,10 @@ final class SpoofBridges {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadBytesMode == null) {
             int read = asInt(bReadBytesMode, self, buf, off, size, mode);
-            if (liveMicDsp() && read > 0) NativeCore.processMicBytes(buf, off, read, sampleRate(self), channels(self));
+            if (read > 0) {
+                top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.processBytes(
+                        self, buf, off, read, sampleRate(self), channels(self));
+            }
             return read;
         }
         return onReadBytes(self, buf, off, size);
@@ -807,7 +835,10 @@ final class SpoofBridges {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadShorts == null) {
             int read = asInt(bReadShorts, self, buf, off, size);
-            if (liveMicDsp() && read > 0) NativeCore.processMicShorts(buf, off, read, sampleRate(self), channels(self));
+            if (read > 0) {
+                top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.processShorts(
+                        self, buf, off, read, sampleRate(self), channels(self));
+            }
             return read;
         }
         VirtualMicProxy.ensurePcm();
@@ -818,7 +849,10 @@ final class SpoofBridges {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, off, size);
         if (!micSpoof() || bReadShortsMode == null) {
             int read = asInt(bReadShortsMode, self, buf, off, size, mode);
-            if (liveMicDsp() && read > 0) NativeCore.processMicShorts(buf, off, read, sampleRate(self), channels(self));
+            if (read > 0) {
+                top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.processShorts(
+                        self, buf, off, read, sampleRate(self), channels(self));
+            }
             return read;
         }
         return onReadShorts(self, buf, off, size);
@@ -828,7 +862,10 @@ final class SpoofBridges {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, size);
         if (!micSpoof() || bReadBuffer == null) {
             int read = asInt(bReadBuffer, self, buf, size);
-            if (liveMicDsp() && read > 0) NativeCore.processMicDirect(buf, read, sampleRate(self), channels(self), false);
+            if (read > 0) {
+                top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.processDirect(
+                        self, buf, read, sampleRate(self), channels(self), isFloatFormat(self));
+            }
             return read;
         }
         VirtualMicProxy.ensurePcm();
@@ -839,7 +876,10 @@ final class SpoofBridges {
         if (SpoofCameraAudio.active(self)) return SpoofCameraAudio.read(self, buf, size);
         if (!micSpoof() || bReadBufferMode == null) {
             int read = asInt(bReadBufferMode, self, buf, size, mode);
-            if (liveMicDsp() && read > 0) NativeCore.processMicDirect(buf, read, sampleRate(self), channels(self), false);
+            if (read > 0) {
+                top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.processDirect(
+                        self, buf, read, sampleRate(self), channels(self), isFloatFormat(self));
+            }
             return read;
         }
         return onReadBuffer(self, buf, size);
@@ -848,7 +888,10 @@ final class SpoofBridges {
     static int onReadFloats(Object self, float[] buf, int off, int size, int mode) throws Throwable {
         if (!micSpoof() || bReadFloats == null) {
             int read = asInt(bReadFloats, self, buf, off, size, mode);
-            if (liveMicDsp() && read > 0) NativeCore.processMicFloats(buf, off, read, sampleRate(self), channels(self));
+            if (read > 0) {
+                top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.processFloats(
+                        self, buf, off, read, sampleRate(self), channels(self));
+            }
             return read;
         }
         VirtualMicProxy.ensurePcm();
@@ -856,6 +899,7 @@ final class SpoofBridges {
     }
 
     static void onStartRec(Object self) throws Throwable {
+        top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.onStartRecording(self);
         if (SpoofCameraAudio.start(self)) {
             micStarted.put(self, Boolean.TRUE);
             return;
@@ -869,6 +913,7 @@ final class SpoofBridges {
     }
 
     static void onStopRec(Object self) throws Throwable {
+        top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.onStopRecording(self);
         SpoofCameraAudio.stop(self);
         micStarted.remove(self);
         if (bStopRec != null) ArtMethodHook.call(bStopRec, self);
@@ -975,6 +1020,14 @@ final class SpoofBridges {
     private static int channels(Object self) {
         try { return self instanceof AudioRecord ? Math.max(1, ((AudioRecord) self).getChannelCount()) : 1; }
         catch (Throwable ignored) { return 1; }
+    }
+
+    private static boolean isFloatFormat(Object self) {
+        try {
+            return self instanceof AudioRecord && ((AudioRecord) self).getAudioFormat() == android.media.AudioFormat.ENCODING_PCM_FLOAT;
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     private static int asInt(Method backup, Object self, Object... args) throws Throwable {

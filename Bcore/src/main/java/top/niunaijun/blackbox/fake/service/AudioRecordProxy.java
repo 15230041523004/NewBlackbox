@@ -89,6 +89,7 @@ public class AudioRecordProxy extends ClassInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Slog.d(TAG, "AudioRecord: release");
+            top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.onRelease(who);
             VirtualMicProxy.resetStatic();
             return method.invoke(who, args);
         }

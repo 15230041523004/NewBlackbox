@@ -31,12 +31,13 @@ public class AppSpoofConfig {
     public final float micPitchSemitones;
     public final float micFormantShift;
     public final boolean micUnderflowSilence;
+    public final String micBackend;
 
     private AppSpoofConfig(boolean grantCamera, boolean grantMic, boolean grantSensors,
                            boolean cameraAudioFromVideo, boolean cameraFillFrame,
                            String micMode, String micProfile, float micInputGain,
                            float micPitchSemitones, float micFormantShift,
-                           boolean micUnderflowSilence) {
+                           boolean micUnderflowSilence, String micBackend) {
         this.grantCamera = grantCamera;
         this.grantMic = grantMic;
         this.grantSensors = grantSensors;
@@ -48,6 +49,7 @@ public class AppSpoofConfig {
         this.micPitchSemitones = micPitchSemitones;
         this.micFormantShift = micFormantShift;
         this.micUnderflowSilence = micUnderflowSilence;
+        this.micBackend = micBackend != null ? micBackend : "auto";
     }
 
     public static AppSpoofConfig fromFile(File f) {
@@ -70,11 +72,16 @@ public class AppSpoofConfig {
             float gain = clamp((float) o.optDouble("mic_input_gain", 1.0), 0f, 4f);
             float pitch = clamp((float) o.optDouble("mic_pitch_semitones", 4.0), -12f, 12f);
             float formant = clamp((float) o.optDouble("mic_formant_shift", 0.25), -1f, 1f);
+            boolean silenceUnderflow = !"bypass".equalsIgnoreCase(o.optString("mic_underflow_policy", "silence"));
+            if ("dsp".equals(mode) || "neural".equals(mode)) {
+                silenceUnderflow = true;
+            }
+            String backend = o.optString("mic_backend", "auto");
             return new AppSpoofConfig(cam, mic, sens,
                     "video".equals(o.optString("camera_audio_source", "microphone")),
                     "fill".equals(o.optString("camera_scale_mode", "fit")),
                     mode, profile, gain, pitch, formant,
-                    "silence".equals(o.optString("mic_underflow_policy", "bypass")));
+                    silenceUnderflow, backend);
         } catch (Exception e) {
             Slog.w("AppSpoofConfig", "Failed to parse config: " + e.getMessage());
             return defaults();
@@ -104,7 +111,7 @@ public class AppSpoofConfig {
 
     private static AppSpoofConfig defaults() {
         return new AppSpoofConfig(true, true, true, false, false,
-                "file", "female", 1f, 4f, 0.25f, false);
+                "file", "female", 1f, 4f, 0.25f, false, "auto");
     }
 
     private static String normalizeMode(String value) {

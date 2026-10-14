@@ -395,7 +395,8 @@ void ProcessLive(void *buffer, int frames, int channels, bool as_float, int samp
     AudioFrame output;
     if (!g_output_ring.read(output) || output.frames != frames || output.channels != channels) {
         g_underflows.fetch_add(1, std::memory_order_relaxed);
-        if (g_underflow_silence.load(std::memory_order_relaxed)) {
+        int current_mode = g_mode.load(std::memory_order_relaxed);
+        if (current_mode == MODE_DSP || current_mode == MODE_NEURAL || g_underflow_silence.load(std::memory_order_relaxed)) {
             memset(buffer, 0, static_cast<size_t>(count) * (as_float ? sizeof(float) : sizeof(int16_t)));
         }
         return;
