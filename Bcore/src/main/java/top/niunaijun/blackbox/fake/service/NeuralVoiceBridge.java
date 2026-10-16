@@ -17,6 +17,7 @@ import top.niunaijun.blackbox.utils.VirtualResourceManager;
 public final class NeuralVoiceBridge {
     private static final String TAG = "NeuralVoiceBridge";
     private static volatile Object sEngineInstance = null;
+    private static volatile Method sProcessDirectMethod = null;
     private static volatile Method sPushDirectMethod = null;
     private static volatile Method sPullDirectMethod = null;
     private static volatile Method sIsLoadedMethod = null;
@@ -38,6 +39,7 @@ public final class NeuralVoiceBridge {
 
     public static synchronized void setEngine(Object engine) {
         sEngineInstance = engine;
+        sProcessDirectMethod = null;
         sPushDirectMethod = null;
         sPullDirectMethod = null;
         sIsLoadedMethod = null;
@@ -46,15 +48,34 @@ public final class NeuralVoiceBridge {
         if (engine != null) {
             try {
                 Class<?> cls = engine.getClass();
-                sPushDirectMethod = cls.getMethod("pushInputDirect",
-                        ByteBuffer.class, int.class, int.class, int.class, boolean.class, long.class);
-                sPullDirectMethod = cls.getMethod("pullOutputDirect",
-                        ByteBuffer.class, int.class, int.class, int.class, boolean.class);
-                sIsLoadedMethod = cls.getMethod("isLoaded");
+                // 1. Try MeanVc2Plugin direct entry point: processDirect(ByteBuffer, ByteBuffer, int, int, int, boolean)
+                try {
+                    sProcessDirectMethod = cls.getMethod("processDirect",
+                            ByteBuffer.class, ByteBuffer.class, int.class, int.class, int.class, boolean.class);
+                } catch (NoSuchMethodException ignored) {}
+
+                // 2. Fallback to StreamingVoiceEngine direct methods if engine passed directly
+                try {
+                    sPushDirectMethod = cls.getMethod("pushInputDirect",
+                            ByteBuffer.class, int.class, int.class, int.class, boolean.class, long.class);
+                    sPullDirectMethod = cls.getMethod("pullOutputDirect",
+                            ByteBuffer.class, int.class, int.class, int.class, boolean.class);
+                } catch (NoSuchMethodException ignored) {}
+
+                // 3. Ready check
+                try {
+                    sIsLoadedMethod = cls.getMethod("isReady");
+                } catch (Throwable e) {
+                    try {
+                        sIsLoadedMethod = cls.getMethod("isLoaded");
+                    } catch (Throwable ignored) {}
+                }
+
+                // 4. Voice selection
                 try {
                     sSelectVoiceMethod = cls.getMethod("selectVoice", String.class);
                 } catch (Throwable ignored) {}
-                Slog.i(TAG, "NeuralVoiceBridge linked to " + cls.getName());
+                Slog.i(TAG, "NeuralVoiceBridge linked to " + cls.getName() + " (processDirect=" + (sProcessDirectMethod != null) + ")");
             } catch (Throwable t) {
                 Slog.e(TAG, "Failed to reflect engine methods: " + t.getMessage());
             }
@@ -67,13 +88,14 @@ public final class NeuralVoiceBridge {
 
     public static boolean isEngineReady() {
         Object engine = sEngineInstance;
+        if (engine == null) return false;
         Method isLoaded = sIsLoadedMethod;
-        if (engine == null || isLoaded == null) return false;
-        try {
-            return Boolean.TRUE.equals(isLoaded.invoke(engine));
-        } catch (Throwable ignored) {
-            return false;
+        if (isLoaded != null) {
+            try {
+                return Boolean.TRUE.equals(isLoaded.invoke(engine));
+            } catch (Throwable ignored) {}
         }
+        return sProcessDirectMethod != null || sPushDirectMethod != null;
     }
 
     private static volatile String sCurrentMode = null;
@@ -83,11 +105,12 @@ public final class NeuralVoiceBridge {
     private static volatile boolean sCurrentUnderflowSilence = false;
 
     private static void checkDynamicProfileUpdate() {
-        String pkg = sCurrentPkg;
-        if (pkg == null || pkg.isEmpty()) {
-            pkg = VirtualResourceManager.currentPackage();
-        }
-        if (pkg == null || pkg.isEmpty()) return;
+        // Loading this bridge in the host (Local Voice Test/diagnostics) must not
+        // install guest mic substitution over the real microphone source.
+        // Guest processes retain the existing capture -> neural -> guest path.
+        boolean guestProcess = top.niunaijun.blackbox.BlackBoxCore.get().isBlackProcess();
+        String pkg = guestProcess ? top.niunaijun.blackbox.app.BActivityThread.getAppPackageName() : null;
+        if (!GuestMicScope.allows(guestProcess, pkg, sCurrentPkg)) return;
 
         AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
         if (config == null) return;
@@ -153,50 +176,73 @@ public final class NeuralVoiceBridge {
         }
     }
 
+    private static final java.util.concurrent.ScheduledExecutorService sBackgroundExecutor =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "NeuralBridge-ConfigWatcher");
+                t.setDaemon(true);
+                return t;
+            });
+
+    static {
+        sBackgroundExecutor.scheduleWithFixedDelay(() -> {
+            try {
+                checkDynamicProfileUpdate();
+            } catch (Throwable ignored) {}
+        }, 500, 500, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
     /**
      * Called directly from C++ VoiceWorker on MODE_NEURAL.
-     * Guaranteed zero heap allocations on steady-state.
+     * Guaranteed zero heap allocations and zero logging on the audio thread.
      */
     public static void processFrame(ByteBuffer inBuf, ByteBuffer outBuf, int frames, int channels, int sampleRate) {
         if (inBuf != null) inBuf.order(ByteOrder.nativeOrder());
         if (outBuf != null) outBuf.order(ByteOrder.nativeOrder());
 
-        long now = SystemClock.uptimeMillis();
-        if (now - sLastCheckTime > 250) {
-            sLastCheckTime = now;
-            checkDynamicProfileUpdate();
-        }
-
         Object engine = sEngineInstance;
+        Method processMethod = sProcessDirectMethod;
         Method pushMethod = sPushDirectMethod;
         Method pullMethod = sPullDirectMethod;
 
-        if (engine == null || pushMethod == null || pullMethod == null) {
-            // Engine not yet attached; passthrough directly
-            if (inBuf != null && outBuf != null) {
-                inBuf.rewind();
+        if (engine == null || (processMethod == null && (pushMethod == null || pullMethod == null))) {
+            // Strict fail-closed: fill output with silence when neural engine is not attached
+            if (outBuf != null) {
                 outBuf.rewind();
-                int limit = Math.min(inBuf.remaining(), outBuf.remaining());
-                for (int i = 0; i < limit; i++) {
-                    outBuf.put(inBuf.get());
+                while (outBuf.hasRemaining()) {
+                    outBuf.put((byte) 0);
                 }
+                outBuf.rewind();
             }
             return;
         }
 
         try {
-            int byteCount = frames * channels * 4; // float PCM: 4 bytes per sample
-            pushMethod.invoke(engine, inBuf, 0, byteCount, channels, true, 0L);
-            pullMethod.invoke(engine, outBuf, 0, byteCount, channels, true);
-        } catch (Throwable t) {
-            Slog.w(TAG, "Neural processFrame error: " + t.getMessage());
-            if (inBuf != null && outBuf != null) {
-                inBuf.rewind();
+            boolean success = false;
+            if (processMethod != null) {
+                // Unified production path: MeanVc2Plugin.processDirect
+                Object res = processMethod.invoke(engine, inBuf, outBuf, frames, channels, sampleRate, true);
+                success = Boolean.TRUE.equals(res);
+            } else {
+                int byteCount = frames * channels * 4; // float PCM: 4 bytes per sample
+                pushMethod.invoke(engine, inBuf, 0, byteCount, channels, true, 0L);
+                Object pulled = pullMethod.invoke(engine, outBuf, 0, byteCount, channels, true);
+                success = (pulled instanceof Integer) && ((Integer) pulled) > 0;
+            }
+            if (!success && outBuf != null) {
                 outBuf.rewind();
-                int limit = Math.min(inBuf.remaining(), outBuf.remaining());
-                for (int i = 0; i < limit; i++) {
-                    outBuf.put(inBuf.get());
+                while (outBuf.hasRemaining()) {
+                    outBuf.put((byte) 0);
                 }
+                outBuf.rewind();
+            }
+        } catch (Throwable t) {
+            // Strict fail-closed: fill output with silence on processing failure without logging on audio thread
+            if (outBuf != null) {
+                outBuf.rewind();
+                while (outBuf.hasRemaining()) {
+                    outBuf.put((byte) 0);
+                }
+                outBuf.rewind();
             }
         }
     }
