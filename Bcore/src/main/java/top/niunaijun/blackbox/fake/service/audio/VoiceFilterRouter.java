@@ -26,6 +26,7 @@ public final class VoiceFilterRouter {
     private static final SilenceFallbackProcessor SILENCE_FALLBACK = new SilenceFallbackProcessor();
 
     private static final AtomicReference<VoiceProcessor> sActiveProcessor = new AtomicReference<>(BYPASS);
+    private static volatile LiveNeuralSink sLiveSink;
     private static volatile String sActiveMode = "bypass";
     private static volatile String sActiveProfile = "default";
     private static volatile long sLastConfigCheck = 0;
@@ -41,6 +42,39 @@ public final class VoiceFilterRouter {
     public static final AtomicLong sErrorCount = new AtomicLong(0);
 
     private VoiceFilterRouter() {}
+
+    public static void setLiveSink(LiveNeuralSink sink) {
+        sLiveSink = sink;
+    }
+
+    public static LiveNeuralSink getLiveSink() {
+        return sLiveSink;
+    }
+
+    /**
+     * Called from the native voice worker, not from the guest read stack.
+     * A false result tells the bridge to write silence.
+     */
+    public static boolean dispatchNeural(java.nio.ByteBuffer inBuf, java.nio.ByteBuffer outBuf,
+                                         int frames, int channels, int sampleRate) {
+        LiveNeuralSink sink = sLiveSink;
+        if (sink == null) return false;
+        try {
+            return sink.process(inBuf, outBuf, frames, channels, sampleRate);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private static boolean liveHostReady() {
+        LiveNeuralSink sink = sLiveSink;
+        if (sink == null) return false;
+        try {
+            return sink.isReady();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     /**
      * Resolves the processor based on current package configuration.
@@ -79,15 +113,18 @@ public final class VoiceFilterRouter {
             String profile = config.micProfile;
 
             if ("neural".equals(mode)) {
-                if (!NeuralVoiceBridge.isEngineReady()) {
+                boolean hostReady = liveHostReady();
+                if (!hostReady && !NeuralVoiceBridge.isEngineReady()) {
                     top.niunaijun.blackbox.fake.service.SpoofHookInstaller.initNeuralEngine(pkg);
+                    hostReady = liveHostReady();
                 }
-                if (FEATURE_NEURAL_ENABLED && NeuralVoiceBridge.isEngineReady()) {
+                if (FEATURE_NEURAL_ENABLED && (hostReady || NeuralVoiceBridge.isEngineReady())) {
                     NEURAL.selectVoice(profile);
                     setProcessor("neural", profile, NEURAL);
                 } else {
                     String err = "Neural filter requested (" + profile + ") but engine is not ready (featureEnabled="
-                            + FEATURE_NEURAL_ENABLED + ", engineReady=" + NeuralVoiceBridge.isEngineReady()
+                            + FEATURE_NEURAL_ENABLED + ", hostReady=" + hostReady
+                            + ", engineReady=" + NeuralVoiceBridge.isEngineReady()
                             + "). Audio muted for security.";
                     SilenceFallbackProcessor.setLastError(err);
                     DiagnosticAudioTap.logEvent("SECURITY_MUTE", err);
@@ -142,6 +179,12 @@ public final class VoiceFilterRouter {
 
     public static void onStartRecording(Object audioRecord) {
         DiagnosticAudioTap.logEvent("START_RECORDING", "AudioRecord started recording");
+        LiveNeuralSink sink = sLiveSink;
+        if (sink != null && audioRecord instanceof android.media.AudioRecord) {
+            try {
+                sink.noteSampleRate(((android.media.AudioRecord) audioRecord).getSampleRate());
+            } catch (Throwable ignored) {}
+        }
         VoiceProcessor p = getProcessor();
         if (p != null) {
             p.reset();

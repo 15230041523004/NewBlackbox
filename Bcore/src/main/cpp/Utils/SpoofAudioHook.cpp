@@ -253,14 +253,21 @@ void InitBridge(JNIEnv *env) {
     }
 }
 
+void SilenceFrame(AudioFrame &frame) {
+    const int count = frame.frames * frame.channels;
+    if (count > 0) std::fill_n(frame.samples.begin(), count, 0.0f);
+}
+
 void ApplyNeuralVc(AudioFrame &frame) {
     JavaVM *vm = BoxCore::getJavaVM();
     if (vm == nullptr) {
+        SilenceFrame(frame);
         return;
     }
     JNIEnv *env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
         if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || env == nullptr) {
+            SilenceFrame(frame);
             return;
         }
     }
@@ -269,10 +276,12 @@ void ApplyNeuralVc(AudioFrame &frame) {
     }
     if (g_bridge_class == nullptr || g_bridge_process == nullptr
             || g_direct_in == nullptr || g_direct_out == nullptr) {
+        SilenceFrame(frame);
         return;
     }
     const int count = frame.frames * frame.channels;
     if (count <= 0 || count > static_cast<int>(kMaxSamples)) {
+        SilenceFrame(frame);
         return;
     }
     std::copy_n(frame.samples.begin(), count, g_neural_in.begin());
@@ -281,6 +290,7 @@ void ApplyNeuralVc(AudioFrame &frame) {
                               frame.frames, frame.channels, frame.sample_rate);
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
+        SilenceFrame(frame);
         return;
     }
     std::copy_n(g_neural_out.begin(), count, frame.samples.begin());
@@ -295,15 +305,10 @@ void *VoiceWorker(void *) {
         }
         int64_t started = MonotonicNs();
         const int mode = g_mode.load(std::memory_order_relaxed);
-        if (mode == MODE_NEURAL || mode == MODE_DSP) {
+        if (mode == MODE_NEURAL) {
             ApplyNeuralVc(frame);
-        } else if (mode == MODE_BYPASS) {
-            static uint64_t last_bypass_check = 0;
-            uint64_t now_ns = static_cast<uint64_t>(started);
-            if (now_ns - last_bypass_check > 250000000ULL) {
-                last_bypass_check = now_ns;
-                ApplyNeuralVc(frame);
-            }
+        } else if (mode == MODE_DSP) {
+            ApplyDsp(frame);
         }
         uint64_t elapsed = static_cast<uint64_t>(MonotonicNs() - started);
         g_processed_frames.fetch_add(static_cast<uint64_t>(frame.frames), std::memory_order_relaxed);

@@ -192,58 +192,31 @@ public final class NeuralVoiceBridge {
     }
 
     /**
-     * Called directly from C++ VoiceWorker on MODE_NEURAL.
-     * Guaranteed zero heap allocations and zero logging on the audio thread.
+     * Called from the C++ voice worker on MODE_NEURAL.
+     * The guest read thread does not enter this method.
      */
     public static void processFrame(ByteBuffer inBuf, ByteBuffer outBuf, int frames, int channels, int sampleRate) {
         if (inBuf != null) inBuf.order(ByteOrder.nativeOrder());
         if (outBuf != null) outBuf.order(ByteOrder.nativeOrder());
 
-        Object engine = sEngineInstance;
-        Method processMethod = sProcessDirectMethod;
-        Method pushMethod = sPushDirectMethod;
-        Method pullMethod = sPullDirectMethod;
-
-        if (engine == null || (processMethod == null && (pushMethod == null || pullMethod == null))) {
-            // Strict fail-closed: fill output with silence when neural engine is not attached
-            if (outBuf != null) {
-                outBuf.rewind();
-                while (outBuf.hasRemaining()) {
-                    outBuf.put((byte) 0);
-                }
-                outBuf.rewind();
-            }
-            return;
-        }
-
+        boolean written = false;
         try {
-            boolean success = false;
-            if (processMethod != null) {
-                // Unified production path: MeanVc2Plugin.processDirect
-                Object res = processMethod.invoke(engine, inBuf, outBuf, frames, channels, sampleRate, true);
-                success = Boolean.TRUE.equals(res);
-            } else {
-                int byteCount = frames * channels * 4; // float PCM: 4 bytes per sample
-                pushMethod.invoke(engine, inBuf, 0, byteCount, channels, true, 0L);
-                Object pulled = pullMethod.invoke(engine, outBuf, 0, byteCount, channels, true);
-                success = (pulled instanceof Integer) && ((Integer) pulled) > 0;
-            }
-            if (!success && outBuf != null) {
-                outBuf.rewind();
-                while (outBuf.hasRemaining()) {
-                    outBuf.put((byte) 0);
-                }
-                outBuf.rewind();
-            }
-        } catch (Throwable t) {
-            // Strict fail-closed: fill output with silence on processing failure without logging on audio thread
-            if (outBuf != null) {
-                outBuf.rewind();
-                while (outBuf.hasRemaining()) {
-                    outBuf.put((byte) 0);
-                }
-                outBuf.rewind();
-            }
+            written = top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.dispatchNeural(
+                    inBuf, outBuf, frames, channels, sampleRate);
+        } catch (Throwable ignored) {
+            written = false;
         }
+        if (!written) {
+            writeSilence(outBuf);
+        }
+    }
+
+    private static void writeSilence(ByteBuffer outBuf) {
+        if (outBuf == null) return;
+        outBuf.rewind();
+        while (outBuf.hasRemaining()) {
+            outBuf.put((byte) 0);
+        }
+        outBuf.rewind();
     }
 }

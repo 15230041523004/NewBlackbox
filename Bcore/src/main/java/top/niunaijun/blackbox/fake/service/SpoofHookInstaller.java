@@ -107,84 +107,26 @@ public final class SpoofHookInstaller {
 
     public static void initNeuralEngine(String pkg) {
         try {
-            if (NeuralVoiceBridge.getEngine() != null) return;
-
             AppSpoofConfig config = VirtualResourceManager.getSpoofConfig(pkg);
-            if (config != null && "cpu".equalsIgnoreCase(config.micBackend)) {
-                // Strict fail-closed: CPU neural processing is strictly prohibited
+            String backend = config == null || config.micBackend == null ? "auto" : config.micBackend;
+            if ("cpu".equalsIgnoreCase(backend)) {
                 Slog.w(TAG, "micBackend=cpu requested for " + pkg + ", but CPU neural processing is prohibited. Failing closed to silence.");
                 NeuralVoiceBridge.setEngine(null);
-                return;
+                backend = "cpu";
             }
 
             android.content.Context context = top.niunaijun.blackbox.BlackBoxCore.get().getContext();
-
-            // Instantiate MeanVc2Plugin (unified VoicePlugin entry point)
-            Class<?> pluginClass = Class.forName("com.blacktwin.voice.MeanVc2Plugin");
-            Object plugin = null;
-            try {
-                plugin = pluginClass.getConstructor(android.content.Context.class).newInstance(context);
-            } catch (Throwable e) {
-                plugin = pluginClass.newInstance();
+            top.niunaijun.blackbox.fake.service.audio.LiveNeuralSink sink =
+                    top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.getLiveSink();
+            if (sink == null) {
+                Class<?> host = Class.forName("com.blacktwin.voice.LiveVoiceHost");
+                host.getMethod("register", android.content.Context.class).invoke(null, context);
+                sink = top.niunaijun.blackbox.fake.service.audio.VoiceFilterRouter.getLiveSink();
             }
-
-            Class<?> backendPrefClass = Class.forName("com.blacktwin.domain.voice.BackendPreference");
-            Object targetBackendEnum = null;
-            if (config != null && "npu".equalsIgnoreCase(config.micBackend)) {
-                targetBackendEnum = Enum.valueOf((Class<Enum>) backendPrefClass, "NPU");
-            } else if (config != null && "gpu".equalsIgnoreCase(config.micBackend)) {
-                targetBackendEnum = Enum.valueOf((Class<Enum>) backendPrefClass, "GPU");
+            if (sink != null) {
+                sink.ensureActivated(context, backend, 0);
             } else {
-                targetBackendEnum = Enum.valueOf((Class<Enum>) backendPrefClass, "AUTO");
-            }
-
-            String targetVoice = "child_01";
-            if (config != null) {
-                if ("female".equals(config.micProfile)) {
-                    targetVoice = "female_01";
-                } else if ("deep".equals(config.micProfile)) {
-                    targetVoice = "deep_01";
-                } else if ("child".equals(config.micProfile)) {
-                    targetVoice = "child_01";
-                } else if (config.micProfile != null && !config.micProfile.isEmpty()) {
-                    targetVoice = config.micProfile;
-                }
-            }
-
-            // Configure VoicePluginConfig
-            Class<?> configClass = Class.forName("com.blacktwin.domain.voice.VoicePluginConfig");
-            Object pluginConfig = null;
-            for (java.lang.reflect.Constructor<?> c : configClass.getConstructors()) {
-                Class<?>[] pTypes = c.getParameterTypes();
-                if (pTypes.length == 7) {
-                    pluginConfig = c.newInstance(targetBackendEnum, null, "", 640, 16000, 1, true);
-                    break;
-                }
-            }
-            if (pluginConfig == null) {
-                pluginConfig = configClass.newInstance();
-            }
-
-            Method configureMethod = pluginClass.getMethod("configure", configClass);
-            configureMethod.invoke(plugin, pluginConfig);
-
-            Method prepareMethod = pluginClass.getMethod("prepare");
-            boolean ok = (Boolean) prepareMethod.invoke(plugin);
-            if (ok) {
-                try {
-                    Method selectVoice = pluginClass.getMethod("selectVoice", String.class);
-                    selectVoice.invoke(plugin, targetVoice);
-                } catch (Throwable ignored) {}
-                try {
-                    Method warmUp = pluginClass.getMethod("warmUp", int.class);
-                    warmUp.invoke(plugin, 3);
-                } catch (Throwable ignored) {}
-
-                NeuralVoiceBridge.setEngine(plugin);
-                Slog.i(TAG, "MeanVc2Plugin attached to NeuralVoiceBridge for " + pkg + " with voice=" + targetVoice);
-            } else {
-                Slog.w(TAG, "MeanVc2Plugin.prepare failed for " + pkg + ", failing closed to silence");
-                NeuralVoiceBridge.setEngine(null);
+                Slog.w(TAG, "LiveVoiceHost is not registered for " + pkg + ". Neural output stays silent.");
             }
         } catch (Throwable t) {
             Slog.w(TAG, "initNeuralEngine failed: " + t.getMessage(), t);
