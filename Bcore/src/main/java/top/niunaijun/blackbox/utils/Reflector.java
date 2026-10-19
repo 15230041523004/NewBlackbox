@@ -195,7 +195,19 @@ public class Reflector {
         try {
             return (R) mMethod.invoke(caller, args);
         } catch (InvocationTargetException e) {
-            throw new Exception("Oops!", e.getTargetException());
+            Throwable target = e.getTargetException();
+            if (target instanceof RuntimeException) {
+                throw (RuntimeException) target;
+            }
+            if (target instanceof Error) {
+                throw (Error) target;
+            }
+            if (target instanceof Exception) {
+                throw (Exception) target;
+            }
+            throw new Exception("Oops!", target);
+        } catch (RuntimeException | Error e) {
+            throw e;
         } catch (Throwable e) {
             throw new Exception("Oops!", e);
         }
