@@ -403,25 +403,7 @@ public class BActivityThread extends IBActivityThread.Stub {
 
         File appLibDir = BEnvironment.getAppLibDir(packageName);
         applicationInfo.nativeLibraryDir = appLibDir.getAbsolutePath();
-
-        // Extract native libraries if missing or empty
-        File[] existingLibs = appLibDir.listFiles();
-        if (existingLibs == null || existingLibs.length == 0) {
-            try {
-                if (applicationInfo.sourceDir != null) {
-                    NativeUtils.copyNativeLib(new File(applicationInfo.sourceDir), appLibDir);
-                }
-                if (applicationInfo.splitSourceDirs != null) {
-                    for (String splitPath : applicationInfo.splitSourceDirs) {
-                        if (splitPath != null) {
-                            NativeUtils.copyNativeLib(new File(splitPath), appLibDir);
-                        }
-                    }
-                }
-            } catch (Throwable t) {
-                Slog.e(TAG, "Failed on-the-fly native lib extraction", t);
-            }
-        }
+        refreshNativeLibs(applicationInfo, appLibDir);
 
         Object boundApplication = BRActivityThread.get(BlackBoxCore.mainThread()).mBoundApplication();
 
@@ -462,6 +444,8 @@ public class BActivityThread extends IBActivityThread.Stub {
         NativeCore.init(Build.VERSION.SDK_INT);
         try {
             top.niunaijun.blackbox.fake.service.GuestNetworkHooks.install();
+            top.niunaijun.blackbox.fake.service.GmsCallingIdentity.install();
+            top.niunaijun.blackbox.fake.service.GuestFrameClock.install();
         } catch (Throwable networkHookError) {
             Slog.w(TAG, "Guest network hooks were not installed: " + networkHookError.getMessage());
         }
@@ -546,6 +530,7 @@ public class BActivityThread extends IBActivityThread.Stub {
             installProviders(mInitialApplication, bindData.processName, bindData.providers);
 
             onBeforeApplicationOnCreate(packageName, processName, application);
+            top.niunaijun.blackbox.fake.service.GuestFrameClock.watch(application);
             AppInstrumentation.get().callApplicationOnCreate(application);
             onAfterApplicationOnCreate(packageName, processName, application);
 
@@ -1129,6 +1114,54 @@ public class BActivityThread extends IBActivityThread.Stub {
 
     public Object getPackageInfo() {
         return mBoundApplication.info;
+    }
+
+    private static void refreshNativeLibs(ApplicationInfo applicationInfo, File appLibDir) {
+        try {
+            StringBuilder stamp = new StringBuilder();
+            appendApkStamp(stamp, applicationInfo.sourceDir);
+            if (applicationInfo.splitSourceDirs != null) {
+                for (String splitPath : applicationInfo.splitSourceDirs) {
+                    appendApkStamp(stamp, splitPath);
+                }
+            }
+            appLibDir.mkdirs();
+            File stampFile = new File(appLibDir, ".source-stamp");
+            String previous = "";
+            if (stampFile.isFile()) {
+                previous = new String(java.nio.file.Files.readAllBytes(stampFile.toPath()), java.nio.charset.StandardCharsets.UTF_8);
+            }
+            if (stamp.toString().equals(previous)) {
+                return;
+            }
+            File[] old = appLibDir.listFiles();
+            if (old != null) {
+                for (File file : old) {
+                    if (file.getName().endsWith(".so")) {
+                        file.delete();
+                    }
+                }
+            }
+            if (applicationInfo.sourceDir != null) {
+                NativeUtils.copyNativeLib(new File(applicationInfo.sourceDir), appLibDir);
+            }
+            if (applicationInfo.splitSourceDirs != null) {
+                for (String splitPath : applicationInfo.splitSourceDirs) {
+                    if (splitPath != null) {
+                        NativeUtils.copyNativeLib(new File(splitPath), appLibDir);
+                    }
+                }
+            }
+            java.nio.file.Files.write(stampFile.toPath(), stamp.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        } catch (Throwable t) {
+            Slog.e(TAG, "Failed on-the-fly native lib extraction", t);
+        }
+    }
+
+    private static void appendApkStamp(StringBuilder stamp, String path) {
+        if (path == null) return;
+        File apk = new File(path);
+        stamp.append(apk.getAbsolutePath()).append(':').append(apk.length()).append(':').append(apk.lastModified()).append(';');
     }
 
     public static void installProvider(Object mainThread, Context context, ProviderInfo providerInfo, Object holder) throws Throwable {

@@ -186,7 +186,14 @@ public class ActivityStack {
         }
 
         if (singleTop && !clearTop) {
-            if (ComponentUtils.intentFilterEquals(topActivityRecord.intent, intent)) {
+            // singleTop reuses the top instance of this component. Matching the
+            // whole intent drops the relaunch: the game starts MainActivity again
+            // mid-sync with a different action, a second native engine is created,
+            // and that null-dereferences.
+            ComponentName targetComponent = ComponentUtils.toComponentName(activityInfo);
+            if (topActivityRecord != null && targetComponent.equals(topActivityRecord.component)) {
+                newIntentRecord = topActivityRecord;
+            } else if (topActivityRecord != null && ComponentUtils.intentFilterEquals(topActivityRecord.intent, intent)) {
                 newIntentRecord = topActivityRecord;
             } else {
                 synchronized (mLaunchingActivities) {

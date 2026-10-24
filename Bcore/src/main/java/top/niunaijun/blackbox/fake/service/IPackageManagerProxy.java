@@ -111,12 +111,25 @@ public class IPackageManagerProxy extends BinderInvocationStub {
             Intent intent = (Intent) args[0];
             String resolvedType = (String) args[1];
             int flags = MethodParameterUtils.toInt(args[2]);
+            if (GmsCallingIdentity.isGms(intent)) {
+                return method.invoke(who, args);
+            }
             ResolveInfo resolveInfo = BlackBoxCore.getBPackageManager().resolveService(intent, flags, resolvedType, BlackBoxCore.getUserId());
+            if (resolveInfo != null && resolveInfo.serviceInfo != null
+                    && isHostPlatformPackage(resolveInfo.serviceInfo.packageName)) {
+                resolveInfo = null;
+            }
             if (resolveInfo != null) {
                 return resolveInfo;
             }
             return method.invoke(who, args);
         }
+    }
+
+    private static boolean isHostPlatformPackage(String packageName) {
+        return "com.google.android.gms".equals(packageName)
+                || "com.google.android.gsf".equals(packageName)
+                || "com.android.vending".equals(packageName);
     }
 
     @ProxyMethod("setComponentEnabledSetting")
@@ -135,6 +148,9 @@ public class IPackageManagerProxy extends BinderInvocationStub {
             int flags = MethodParameterUtils.toInt(args[1]);
             
             
+            if (isHostPlatformPackage(packageName)) {
+                return method.invoke(who, args);
+            }
             PackageInfo packageInfo = BlackBoxCore.getBPackageManager().getPackageInfo(packageName, flags, BlackBoxCore.getUserId());
             if (packageInfo != null) {
                 
@@ -258,6 +274,9 @@ public class IPackageManagerProxy extends BinderInvocationStub {
 
 
 
+            if (isHostPlatformPackage(packageName)) {
+                return method.invoke(who, args);
+            }
             ApplicationInfo applicationInfo = BlackBoxCore.getBPackageManager().getApplicationInfo(packageName, flags, BlackBoxCore.getUserId());
             if (applicationInfo != null) {
                 return applicationInfo;

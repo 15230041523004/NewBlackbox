@@ -22,6 +22,7 @@ import top.niunaijun.blackbox.fake.hook.MethodHook;
 import top.niunaijun.blackbox.fake.hook.ProxyMethod;
 import top.niunaijun.blackbox.utils.Slog;
 import top.niunaijun.blackbox.BlackBoxCore;
+import top.niunaijun.blackbox.app.BActivityThread;
 import top.niunaijun.blackbox.utils.MethodParameterUtils;
 import top.niunaijun.blackbox.utils.AttributionSourceUtils;
 
@@ -341,10 +342,22 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     }
 
     
+    /** System connectivity rejects the guest package. The Binder uid is the host. */
+    private static void rewriteCallingPackage(Object[] args) {
+        if (args == null) return;
+        String guest = BActivityThread.getAppPackageName();
+        String host = BlackBoxCore.getHostPkg();
+        if (guest == null || host == null || guest.equals(host)) return;
+        for (int i = 0; i < args.length; i++) {
+            if (guest.equals(args[i])) args[i] = host;
+        }
+    }
+
     @ProxyMethod("getAllNetworks")
     public static class GetAllNetworks extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            rewriteCallingPackage(args);
             try {
                 
                 Object result = method.invoke(who, args);
@@ -416,11 +429,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             // Modern signatures are (Network, callingPackageName, callingAttributionTag).
             // The system service validates the package against the real host Binder UID.
-            Class<?>[] parameterTypes = method.getParameterTypes();
-            if (args != null && args.length > 1 && parameterTypes.length > 1
-                    && parameterTypes[1] == String.class) {
-                args[1] = BlackBoxCore.getHostPkg();
-            }
+            rewriteCallingPackage(args);
             if (android.os.Build.VERSION.SDK_INT >= 21) {
                 try {
                     
@@ -451,39 +460,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     public static class GetActiveNetwork extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            if (android.os.Build.VERSION.SDK_INT >= 21) {
-                try {
-                    
-                    Object result = method.invoke(who, args);
-                    if (result != null) {
-                        return result;
-                    }
-
-                    
-                    
-                    android.net.Network network;
-                    try {
-                        
-                        Constructor<android.net.Network> constructor = android.net.Network.class.getConstructor(int.class);
-                        network = constructor.newInstance(1);
-                    } catch (Exception e) {
-                        
-                        try {
-                            Constructor<android.net.Network> defaultConstructor = android.net.Network.class.getDeclaredConstructor();
-                            defaultConstructor.setAccessible(true);
-                            network = defaultConstructor.newInstance();
-                        } catch (Exception e2) {
-                            
-                            Slog.w(TAG, "Could not create Network object, falling back to original method");
-                            return method.invoke(who, args);
-                        }
-                    }
-                    Slog.d(TAG, "Created mock Network object for sandboxed app (fallback)");
-                    return network;
-                } catch (Exception e) {
-                    Slog.w(TAG, "Error creating Network object: " + e.getMessage());
-                }
-            }
+            rewriteCallingPackage(args);
             return method.invoke(who, args);
         }
     }
@@ -493,6 +470,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     public static class GetActiveNetworkInfo extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            rewriteCallingPackage(args);
             try {
                 Object result = method.invoke(who, args);
                 if (result != null) {
@@ -520,6 +498,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     public static class GetLinkProperties extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            rewriteCallingPackage(args);
             if (android.os.Build.VERSION.SDK_INT >= 21) {
                 try {
                     
@@ -601,6 +580,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Slog.d(TAG, "Intercepting requestNetwork call for internet access");
+            rewriteCallingPackage(args);
             try {
                 
                 Object result = method.invoke(who, args);

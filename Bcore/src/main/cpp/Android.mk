@@ -34,6 +34,7 @@ hidden_api.cpp \
 IO.cpp \
 Utils/elf_util.cpp \
 Hook/DexFileHook.cpp \
+Hook/ObbMethodHook.cpp \
 Hook/FileSystemHook.cpp \
 Utils/VirtualSpoof.cpp \
 Utils/SpoofAudioHook.cpp \

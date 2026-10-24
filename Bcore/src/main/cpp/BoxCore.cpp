@@ -12,6 +12,7 @@
 #include <Hook/FileSystemHook.h>
 #include <Hook/BinderHook.h>
 #include <Hook/DexFileHook.h>
+#include <Hook/ObbMethodHook.h>
 #include <Hook/RuntimeHook.h>
 #include "Utils/HexDump.h"
 #include "hidden_api.h"
@@ -80,6 +81,7 @@ void nativeHook(JNIEnv *env) {
 
     BinderHook::init(env);
     DexFileHook::init(env);
+    ObbMethodHook::init(env);
 }
 
 void hideXposed(JNIEnv *env, jclass clazz) {

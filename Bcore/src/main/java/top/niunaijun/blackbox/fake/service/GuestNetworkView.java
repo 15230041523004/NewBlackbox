@@ -253,11 +253,15 @@ public final class GuestNetworkView {
                     try {
                         Bundle data = incoming.peekData();
                         if (data != null) outgoing.setData(callbackData(service, data));
+                    } catch (Throwable e) {
+                        Slog.w(TAG, "network callback redaction failed: " + e.getMessage());
+                        outgoing.recycle();
+                        outgoing = Message.obtain(incoming);
+                    }
+                    try {
                         destination.send(outgoing);
                     } catch (RemoteException e) {
                         Slog.d(TAG, "network callback receiver stopped");
-                    } catch (Throwable e) {
-                        Slog.w(TAG, "network callback redaction failed: " + e.getMessage());
                     }
                 }
             });
