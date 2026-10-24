@@ -393,8 +393,9 @@ public class IActivityManagerProxy extends ClassInvocationStub {
 
             int userId = intent.getIntExtra("_B_|_UserId", -1);
             userId = userId == -1 ? BActivityThread.getUserId() : userId;
-            ResolveInfo resolveInfo = BlackBoxCore.getBPackageManager().resolveService(intent, 0, resolvedType, userId);
-            if (resolveInfo != null || AppSystemEnv.isOpenPackage(intent.getComponent())) {
+            boolean hostGms = GmsCallingIdentity.isGms(intent);
+            ResolveInfo resolveInfo = hostGms ? null : BlackBoxCore.getBPackageManager().resolveService(intent, 0, resolvedType, userId);
+            if (!hostGms && (resolveInfo != null || AppSystemEnv.isOpenPackage(intent.getComponent()))) {
                 Intent proxyIntent = BlackBoxCore.getBActivityManager().bindService(intent,
                         connection == null ? null : connection.asBinder(),
                         resolvedType,
@@ -428,6 +429,15 @@ public class IActivityManagerProxy extends ClassInvocationStub {
                     args[2] = proxyIntent;
                     return method.invoke(who, args);
                 }
+            }
+            if (GmsCallingIdentity.isGms(intent) && connection != null) {
+                IServiceConnection proxy = GmsCallingIdentity.wrap(connection);
+                args[4] = proxy;
+                if (callingPackageIndex >= 0 && callingPackageIndex < args.length
+                        && args[callingPackageIndex] instanceof String) {
+                    args[callingPackageIndex] = BlackBoxCore.getHostPkg();
+                }
+                return method.invoke(who, args);
             }
             return method.invoke(who, args);
         } catch (Exception e) {
