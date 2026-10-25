@@ -59,6 +59,7 @@ public class BlackBoxSystem {
         mServices.add(BPackageInstallerService.get());
 
         mServices.add(BProcessManagerService.get());
+        mServices.add(top.niunaijun.blackbox.core.system.network.BNetworkRelayService.get());
         mServices.add(BAccountManagerService.get());
         mServices.add(BLocationManagerService.get());
         mServices.add(BNotificationManagerService.get());

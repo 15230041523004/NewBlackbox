@@ -331,6 +331,39 @@ public class BProcessManagerService implements ISystemService {
         }
     }
 
+    public static class NetworkCaller {
+        public final int userId;
+        public final String packageName;
+        public final String processName;
+        public final int pid;
+        public final int bpid;
+
+        public NetworkCaller(int userId, String packageName, String processName, int pid, int bpid) {
+            this.userId = userId;
+            this.packageName = packageName;
+            this.processName = processName;
+            this.pid = pid;
+            this.bpid = bpid;
+        }
+    }
+
+    public NetworkCaller resolveNetworkCaller(int pid) {
+        synchronized (mPidsSelfLocked) {
+            for (ProcessRecord record : mPidsSelfLocked) {
+                if (record.pid == pid) {
+                    return new NetworkCaller(
+                        record.userId,
+                        record.getPackageName(),
+                        record.processName,
+                        record.pid,
+                        record.bpid
+                    );
+                }
+            }
+        }
+        return null;
+    }
+
     private static void removeProc(ProcessRecord record) {
         FileUtils.deleteDir(BEnvironment.getProcDir(record.bpid));
     }
