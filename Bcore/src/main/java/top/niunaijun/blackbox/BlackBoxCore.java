@@ -25,9 +25,9 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 
 import black.android.app.BRActivityThread;
@@ -108,7 +108,7 @@ public class BlackBoxCore extends ClientConfiguration {
         }
     }
     private ProcessType mProcessType;
-    private final Map<String, IBinder> mServices = new HashMap<>();
+    private final Map<String, IBinder> mServices = new ConcurrentHashMap<>();
     private Thread.UncaughtExceptionHandler mExceptionHandler;
     private ClientConfiguration mClientConfiguration;
     private final List<AppLifecycleCallback> mAppLifecycleCallbacks = new ArrayList<>();
@@ -336,6 +336,20 @@ public class BlackBoxCore extends ClientConfiguration {
         }
         
         return getServiceInternal(name);
+    }
+
+    /**
+     * Drops cached Bcore service Binder handles after a transaction reports that
+     * the provider process died. These handles are all served by the same
+     * provider process, so keeping any sibling handle can prevent a fresh
+     * provider lookup from restarting and rebinding the service process.
+     */
+    public void invalidateServiceCacheAfterDeath(String serviceName, IBinder deadBinder) {
+        if (serviceName == null || deadBinder == null) return;
+        boolean removed = mServices.remove(serviceName, deadBinder);
+        if (removed) {
+            mServices.clear();
+        }
     }
     
     private IBinder getServiceInternal(String name) {
@@ -829,6 +843,27 @@ public class BlackBoxCore extends ClientConfiguration {
         }
     }
 
+    /** Sets only the process context before Android publishes ContentProviders. */
+    public void prepareBaseContext(Context context, ClientConfiguration clientConfiguration) {
+        if (context == null) throw new IllegalArgumentException("Context is null!");
+        if (clientConfiguration == null) throw new IllegalArgumentException("ClientConfiguration is null!");
+        try {
+            setEssentialProperties(context, clientConfiguration);
+        } catch (Exception e) {
+            Slog.w(TAG, "Failed to prepare essential properties: " + e.getMessage());
+        }
+        sContext = context;
+        mClientConfiguration = clientConfiguration;
+        String processName = getProcessName(context);
+        if (processName.equals(getHostPackageName())) {
+            mProcessType = ProcessType.Main;
+        } else if (processName.endsWith(context.getString(R.string.black_box_service_name))) {
+            mProcessType = ProcessType.Server;
+        } else {
+            mProcessType = ProcessType.BAppClient;
+        }
+    }
+
     public void doAttachBaseContext(Context context,
                                    ClientConfiguration clientConfiguration) {
         try {
@@ -860,7 +895,6 @@ public class BlackBoxCore extends ClientConfiguration {
         String processName = getProcessName(getContext());
         if (processName.equals(BlackBoxCore.getHostPkg())) {
             mProcessType = ProcessType.Main;
-            startLogcat();
         } else if (processName.endsWith(getContext().getString(R.string.black_box_service_name))) {
             mProcessType = ProcessType.Server;
         } else {

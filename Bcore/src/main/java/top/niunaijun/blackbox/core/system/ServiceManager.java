@@ -29,6 +29,8 @@ public class ServiceManager {
     public static final String LOCATION_MANAGER = "location_manager";
     public static final String NOTIFICATION_MANAGER = "notification_manager";
     public static final String NETWORK_RELAY = "network_relay";
+    public static final String TLS_ROUTE_REGISTRY = "tls_route_registry";
+    public static final String TLS_CONFIGURATION = "tls_configuration";
 
     private final Map<String, IBinder> mCaches = new HashMap<>();
 
@@ -58,6 +60,8 @@ public class ServiceManager {
         mCaches.put(LOCATION_MANAGER, BLocationManagerService.get());
         mCaches.put(NOTIFICATION_MANAGER, BNotificationManagerService.get());
         mCaches.put(NETWORK_RELAY, top.niunaijun.blackbox.core.system.network.BNetworkRelayService.get());
+        mCaches.put(TLS_ROUTE_REGISTRY, top.niunaijun.blackbox.core.system.tls.BTlsRouteRegistryService.get());
+        mCaches.put(TLS_CONFIGURATION, top.niunaijun.blackbox.core.system.tls.BTlsConfigurationService.get());
     }
 
     public IBinder getServiceInternal(String name) {
@@ -75,5 +79,7 @@ public class ServiceManager {
         BlackBoxCore.get().getService(LOCATION_MANAGER);
         BlackBoxCore.get().getService(NOTIFICATION_MANAGER);
         BlackBoxCore.get().getService(NETWORK_RELAY);
+        BlackBoxCore.get().getService(TLS_ROUTE_REGISTRY);
+        BlackBoxCore.get().getService(TLS_CONFIGURATION);
     }
 }

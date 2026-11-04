@@ -96,18 +96,32 @@ tasks.withType(Javadoc) {
 }
 
 
+def android16ApiStubClasses = layout.buildDirectory.dir("android16-api-stubs/classes")
+def compileAndroid16ApiStubs = tasks.register("compileAndroid16ApiStubs", JavaCompile) {
+    source fileTree("src/android16ApiStubs/java") { include "**/*.java" }
+    destinationDirectory.set(android16ApiStubClasses)
+    classpath = files()
+    sourceCompatibility = "8"
+    targetCompatibility = "8"
+}
+def android16ApiStubJar = tasks.register("android16ApiStubJar", Jar) {
+    dependsOn compileAndroid16ApiStubs
+    from android16ApiStubClasses
+    archiveFileName.set("android16-api-compile-stubs.jar")
+    destinationDirectory.set(layout.buildDirectory.dir("android16-api-stubs"))
+}
+
 dependencies {
     implementation fileTree(dir: "libs", include: ["*.jar", "*.aar"])
+    // Android 16 added this hidden framework type to IServiceConnection.connected().
+    // Compile against its name without bundling a counterfeit android.* class in Bcore.
+    compileOnly files(android16ApiStubJar)
+    compileOnly files('../../../tls-contracts/build/outputs/aar/tls-contracts-debug.aar')
   implementation 'com.google.android.material:material:1.3.0'
     implementation(project(":black-reflection"))
     annotationProcessor(project(":compiler"))
     implementation 'androidx.appcompat:appcompat:1.2.0'
 
     implementation 'com.moandjiezana.toml:toml4j:0.7.2'
-
     implementation 'com.github.tiann:FreeReflection:3.2.2'
-
-
-
-    
 }

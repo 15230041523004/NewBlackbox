@@ -83,7 +83,10 @@ public class BPackageManager extends BlackManager<IBPackageManagerService> {
     }
 
     public Intent getLaunchIntentForPackage(String packageName, int userId) {
-        
+        if (packageName == null || packageName.isEmpty()) {
+            return null;
+        }
+
         if (shouldUseFallbackMode()) {
             Log.w(TAG, "Using fallback launch intent for " + packageName + " due to service failures");
             return createFallbackLaunchIntent(packageName);
@@ -97,9 +100,8 @@ public class BPackageManager extends BlackManager<IBPackageManagerService> {
                 intentToResolve.resolveTypeIfNeeded(BlackBoxCore.getContext().getContentResolver()),
                 userId);
 
-        
-        if (ris == null || ris.size() <= 0) {
-            
+        ResolveInfo launchActivity = findLaunchableActivity(ris, packageName);
+        if (launchActivity == null) {
             intentToResolve.removeCategory(Intent.CATEGORY_INFO);
             intentToResolve.addCategory(Intent.CATEGORY_LAUNCHER);
             intentToResolve.setPackage(packageName);
@@ -107,15 +109,31 @@ public class BPackageManager extends BlackManager<IBPackageManagerService> {
                     0,
                     intentToResolve.resolveTypeIfNeeded(BlackBoxCore.getContext().getContentResolver()),
                     userId);
+            launchActivity = findLaunchableActivity(ris, packageName);
         }
-        if (ris == null || ris.size() <= 0) {
+        if (launchActivity == null) {
             return null;
         }
         Intent intent = new Intent(intentToResolve);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.setClassName(ris.get(0).activityInfo.packageName,
-                ris.get(0).activityInfo.name);
+        intent.setClassName(launchActivity.activityInfo.packageName,
+                launchActivity.activityInfo.name);
         return intent;
+    }
+
+    private static ResolveInfo findLaunchableActivity(List<ResolveInfo> results, String packageName) {
+        if (results == null) {
+            return null;
+        }
+        for (ResolveInfo result : results) {
+            ActivityInfo activityInfo = result == null ? null : result.activityInfo;
+            if (activityInfo != null
+                    && packageName.equals(activityInfo.packageName)
+                    && activityInfo.name != null) {
+                return result;
+            }
+        }
+        return null;
     }
     
     

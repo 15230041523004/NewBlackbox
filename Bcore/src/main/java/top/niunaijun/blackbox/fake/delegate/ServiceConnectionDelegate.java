@@ -3,6 +3,7 @@ package top.niunaijun.blackbox.fake.delegate;
 import android.app.IServiceConnection;
 import android.content.ComponentName;
 import android.content.Intent;
+import android.app.IBinderSession;
 import android.os.IBinder;
 import android.os.RemoteException;
 
@@ -54,8 +55,22 @@ public class ServiceConnectionDelegate extends IServiceConnection.Stub {
     }
 
     public void connected(ComponentName name, IBinder service, boolean dead) throws RemoteException {
+        connectedInternal(name, service, null, dead, false);
+    }
+
+    /** Android 16 callback, including the bound-service session token. */
+    public void connected(ComponentName name, IBinder service, IBinderSession session, boolean dead) throws RemoteException {
+        connectedInternal(name, service, session, dead, true);
+    }
+
+    private void connectedInternal(ComponentName name, IBinder service, IBinderSession session,
+                                   boolean dead, boolean hasSession) throws RemoteException {
         if (BuildCompat.isOreo()) {
-            BRIServiceConnectionO.get(mConn).connected(mComponentName, service, dead);
+            if (hasSession) {
+                BRIServiceConnectionO.get(mConn).connected(mComponentName, service, session, dead);
+            } else {
+                BRIServiceConnectionO.get(mConn).connected(mComponentName, service, dead);
+            }
         } else {
             mConn.connected(name, service);
         }

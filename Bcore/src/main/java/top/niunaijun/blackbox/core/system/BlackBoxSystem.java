@@ -60,12 +60,19 @@ public class BlackBoxSystem {
 
         mServices.add(BProcessManagerService.get());
         mServices.add(top.niunaijun.blackbox.core.system.network.BNetworkRelayService.get());
+        mServices.add(top.niunaijun.blackbox.core.system.tls.BTlsRouteRegistryService.get());
+        mServices.add(top.niunaijun.blackbox.core.system.tls.BTlsConfigurationService.get());
         mServices.add(BAccountManagerService.get());
         mServices.add(BLocationManagerService.get());
         mServices.add(BNotificationManagerService.get());
 
         for (ISystemService service : mServices) {
+            String serviceName = service.getClass().getSimpleName();
+            long serviceStart = android.os.SystemClock.elapsedRealtime();
+            Log.i("BlackBoxSystem", "SYSTEM_SERVICE_READY_BEGIN name=" + serviceName);
             service.systemReady();
+            Log.i("BlackBoxSystem", "SYSTEM_SERVICE_READY_END name=" + serviceName +
+                    " elapsedMs=" + (android.os.SystemClock.elapsedRealtime() - serviceStart));
         }
 
         List<String> preInstallPackages = AppSystemEnv.getPreInstallPackages();

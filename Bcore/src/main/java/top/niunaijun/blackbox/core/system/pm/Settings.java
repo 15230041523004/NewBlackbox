@@ -3,13 +3,17 @@ package top.niunaijun.blackbox.core.system.pm;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageParser;
+import android.content.pm.ApplicationInfo;
 import android.os.Parcel;
 import android.os.Process;
+import android.os.Build;
 import android.util.ArrayMap;
 import android.util.AtomicFile;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -18,7 +22,6 @@ import java.util.Set;
 import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.core.env.BEnvironment;
 import top.niunaijun.blackbox.core.system.BProcessManagerService;
-import top.niunaijun.blackbox.core.system.user.BUserHandle;
 import top.niunaijun.blackbox.entity.pm.InstallOption;
 import top.niunaijun.blackbox.utils.FileUtils;
 import top.niunaijun.blackbox.utils.Slog;
@@ -27,6 +30,8 @@ import top.niunaijun.blackbox.utils.compat.PackageParserCompat;
 
  class Settings {
     public static final String TAG = "Settings";
+    private static final String PACKAGE_CACHE_MARKER = "package-cache-runtime";
+    private static final String PACKAGE_CACHE_SCHEMA = "bpackage-parcel-v1\n";
 
     final ArrayMap<String, BPackageSettings> mPackages = new ArrayMap<>();
     private final Map<String, Integer> mAppIds = new HashMap<>();
@@ -178,58 +183,208 @@ import top.niunaijun.blackbox.utils.compat.PackageParserCompat;
             File appRootDir = BEnvironment.getAppRootDir();
             FileUtils.mkdirs(appRootDir);
             File[] apps = appRootDir.listFiles();
+            if (apps == null) {
+                Slog.e(TAG, "PACKAGE_SCAN_ABORT reason=APP_ROOT_UNAVAILABLE");
+                return;
+            }
+            boolean runtimeCompatible = isPackageCacheRuntimeCompatible();
+            boolean allLoaded = true;
             for (File app : apps) {
                 if (!app.isDirectory()) {
                     continue;
                 }
-                scanPackage(app.getName());
+                allLoaded &= updatePackageLP(app, !runtimeCompatible);
+            }
+            if (allLoaded && !runtimeCompatible) {
+                writePackageCacheRuntimeMarker();
             }
         }
     }
 
     public void scanPackage(String packageName) {
         synchronized (mPackages) {
-            updatePackageLP(BEnvironment.getAppDir(packageName));
+            updatePackageLP(BEnvironment.getAppDir(packageName), !isPackageCacheRuntimeCompatible());
         }
     }
 
-    private void updatePackageLP(File app) {
+    private boolean updatePackageLP(File app, boolean migrateForRuntime) {
         String packageName = app.getName();
-        Parcel packageSettingsIn = Parcel.obtain();
         File packageConf = BEnvironment.getPackageConf(packageName);
+        byte[] packageSettingsBytes;
         try {
-            byte[] bPackageSettingsBytes = FileUtils.toByteArray(packageConf);
+            packageSettingsBytes = FileUtils.toByteArray(packageConf);
+            if (packageSettingsBytes == null || packageSettingsBytes.length == 0) {
+                Slog.e(TAG, "PACKAGE_SCAN_ITEM_FAILED package=" + packageName + " reason=EMPTY_SETTINGS");
+                return false;
+            }
+        } catch (Throwable error) {
+            Slog.e(TAG, "PACKAGE_SCAN_ITEM_FAILED package=" + packageName +
+                    " reason=SETTINGS_READ error=" + error.getClass().getSimpleName());
+            return false;
+        }
 
-            packageSettingsIn.unmarshall(bPackageSettingsBytes, 0, bPackageSettingsBytes.length);
+        PersistedPackageConfMetadata persisted = PersistedPackageConfMetadata.read(packageSettingsBytes);
+        if (migrateForRuntime) {
+            if (persisted == null) {
+                Slog.e(TAG, "PACKAGE_CACHE_MIGRATION_SKIPPED package=" + packageName +
+                        " reason=LEGACY_METADATA_UNREADABLE dataPreserved=true");
+                return false;
+            }
+            if (rebuildPackageFromCurrentApk(packageName, persisted)) {
+                Slog.i(TAG, "PACKAGE_CACHE_MIGRATED package=" + packageName +
+                        " appIdPreserved=true userStatePreserved=true dataPreserved=true");
+                return true;
+            }
+            Slog.e(TAG, "PACKAGE_CACHE_MIGRATION_FAILED package=" + packageName +
+                    " dataPreserved=true");
+            return false;
+        }
+
+        Parcel packageSettingsIn = Parcel.obtain();
+        try {
+            packageSettingsIn.unmarshall(packageSettingsBytes, 0, packageSettingsBytes.length);
             packageSettingsIn.setDataPosition(0);
-
             BPackageSettings bPackageSettings = new BPackageSettings(packageSettingsIn);
             bPackageSettings.pkg.mExtras = bPackageSettings;
             if (bPackageSettings.installOption.isFlag(InstallOption.FLAG_SYSTEM)) {
                 PackageInfo packageInfo = BlackBoxCore.getPackageManager().getPackageInfo(packageName, PackageManager.GET_META_DATA);
-                String currPackageSourcePath = packageInfo.applicationInfo.sourceDir;
+                String currPackageSourcePath = packageInfo == null || packageInfo.applicationInfo == null
+                        ? null : packageInfo.applicationInfo.sourceDir;
+                if (currPackageSourcePath == null) {
+                    Slog.e(TAG, "PACKAGE_SCAN_ITEM_FAILED package=" + packageName +
+                            " reason=SYSTEM_APK_UNAVAILABLE dataPreserved=true");
+                    return false;
+                }
                 if (!currPackageSourcePath.equals(bPackageSettings.pkg.baseCodePath)) {
-                    
                     BProcessManagerService.get().killAllByPackageName(bPackageSettings.pkg.packageName);
-                    BPackageSettings newPkg = reInstallBySystem(packageInfo, bPackageSettings.installOption);
-                    bPackageSettings.pkg = newPkg.pkg;
+                    PersistedPackageConfMetadata decoded = persisted != null ? persisted :
+                            new PersistedPackageConfMetadata(bPackageSettings.appId,
+                                    bPackageSettings.installOption, new HashMap<>(bPackageSettings.userState));
+                    BPackageSettings rebuilt = rebuildPackageFromApk(packageName, currPackageSourcePath,
+                            packageInfo.applicationInfo, decoded);
+                    if (rebuilt == null || !rebuilt.save()) {
+                        Slog.e(TAG, "PACKAGE_SCAN_ITEM_FAILED package=" + packageName +
+                                " reason=SYSTEM_APK_REBUILD dataPreserved=true");
+                        return false;
+                    }
+                    bPackageSettings = rebuilt;
                 }
             } else {
                 bPackageSettings.pkg.applicationInfo = PackageManagerCompat.generateApplicationInfo(bPackageSettings.pkg, 0, BPackageUserState.create(), 0);
             }
-            bPackageSettings.save();
             mPackages.put(bPackageSettings.pkg.packageName, bPackageSettings);
             Slog.d(TAG, "loaded Package: " + packageName);
+            return true;
         } catch (Throwable e) {
-            e.printStackTrace();
-            
-            FileUtils.deleteDir(app);
-            removePackage(packageName);
-            BProcessManagerService.get().killAllByPackageName(packageName);
-            BPackageManagerService.get().onPackageUninstalled(packageName, true, BUserHandle.USER_ALL);
-            Slog.d(TAG, "bad Package: " + packageName);
+            if (persisted != null && persisted.installOption.isFlag(InstallOption.FLAG_SYSTEM)) {
+                try {
+                    PackageInfo packageInfo = BlackBoxCore.getPackageManager().getPackageInfo(
+                            packageName, PackageManager.GET_META_DATA);
+                    if (packageInfo != null && packageInfo.applicationInfo != null) {
+                        BPackageSettings rebuilt = rebuildPackageFromApk(packageName,
+                                packageInfo.applicationInfo.sourceDir, packageInfo.applicationInfo, persisted);
+                        if (rebuilt != null && rebuilt.save()) {
+                            mPackages.put(packageName, rebuilt);
+                            Slog.i(TAG, "PACKAGE_CACHE_REPAIRED package=" + packageName +
+                                    " reason=PARCEL_DECODE_FAILED dataPreserved=true");
+                            return true;
+                        }
+                    }
+                } catch (Throwable repairError) {
+                    Slog.e(TAG, "PACKAGE_CACHE_REPAIR_ERROR package=" + packageName +
+                            " error=" + repairError.getClass().getSimpleName());
+                }
+            }
+            Slog.e(TAG, "PACKAGE_SCAN_ITEM_FAILED package=" + packageName +
+                    " reason=PARCEL_DECODE error=" + e.getClass().getSimpleName() +
+                    " dataPreserved=true");
+            return false;
         } finally {
             packageSettingsIn.recycle();
+        }
+    }
+
+    private boolean rebuildPackageFromCurrentApk(String packageName,
+                                                  PersistedPackageConfMetadata metadata) {
+        try {
+            String apkPath;
+            ApplicationInfo hostApplicationInfo = null;
+            if (metadata.installOption.isFlag(InstallOption.FLAG_SYSTEM)) {
+                PackageInfo hostPackage = BlackBoxCore.getPackageManager().getPackageInfo(
+                        packageName, PackageManager.GET_META_DATA);
+                if (hostPackage == null || hostPackage.applicationInfo == null ||
+                        !packageName.equals(hostPackage.packageName)) {
+                    return false;
+                }
+                hostApplicationInfo = hostPackage.applicationInfo;
+                apkPath = hostApplicationInfo.sourceDir;
+            } else if (metadata.installOption.isFlag(InstallOption.FLAG_STORAGE)) {
+                apkPath = BEnvironment.getBaseApkDir(packageName).getAbsolutePath();
+            } else {
+                return false;
+            }
+            BPackageSettings rebuilt = rebuildPackageFromApk(
+                    packageName, apkPath, hostApplicationInfo, metadata);
+            if (rebuilt == null || !rebuilt.save()) {
+                return false;
+            }
+            mPackages.put(packageName, rebuilt);
+            return true;
+        } catch (Throwable error) {
+            Slog.e(TAG, "PACKAGE_CACHE_MIGRATION_ERROR package=" + packageName +
+                    " error=" + error.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    private BPackageSettings rebuildPackageFromApk(String packageName, String apkPath,
+                                                     ApplicationInfo hostApplicationInfo,
+                                                     PersistedPackageConfMetadata metadata) {
+        if (apkPath == null || apkPath.isEmpty() || !new File(apkPath).isFile()) {
+            return null;
+        }
+        PackageParser.Package parsed = parserApk(apkPath);
+        if (parsed == null || !packageName.equals(parsed.packageName)) {
+            return null;
+        }
+        if (hostApplicationInfo != null) {
+            parsed.applicationInfo = hostApplicationInfo;
+        }
+        BPackageSettings settings = new BPackageSettings();
+        settings.pkg = new BPackage(parsed);
+        settings.appId = metadata.appId;
+        settings.installOption = metadata.installOption;
+        settings.userState = new HashMap<>(metadata.userState);
+        settings.pkg.installOption = metadata.installOption;
+        settings.pkg.mExtras = settings;
+        settings.pkg.applicationInfo = PackageManagerCompat.generateApplicationInfo(
+                settings.pkg, 0, BPackageUserState.create(), 0);
+        return settings;
+    }
+
+    private boolean isPackageCacheRuntimeCompatible() {
+        try {
+            byte[] marker = FileUtils.toByteArray(new File(BEnvironment.getSystemDir(), PACKAGE_CACHE_MARKER));
+            if (marker == null) return false;
+            String expected = PACKAGE_CACHE_SCHEMA + Build.FINGERPRINT;
+            return expected.equals(new String(marker, StandardCharsets.UTF_8));
+        } catch (IOException ignored) {
+            return false;
+        }
+    }
+
+    private void writePackageCacheRuntimeMarker() {
+        AtomicFile atomicFile = new AtomicFile(new File(BEnvironment.getSystemDir(), PACKAGE_CACHE_MARKER));
+        FileOutputStream output = null;
+        try {
+            output = atomicFile.startWrite();
+            output.write((PACKAGE_CACHE_SCHEMA + Build.FINGERPRINT).getBytes(StandardCharsets.UTF_8));
+            atomicFile.finishWrite(output);
+        } catch (IOException error) {
+            if (output != null) {
+                atomicFile.failWrite(output);
+            }
+            Slog.e(TAG, "PACKAGE_CACHE_MARKER_WRITE_FAILED error=" + error.getClass().getSimpleName());
         }
     }
 

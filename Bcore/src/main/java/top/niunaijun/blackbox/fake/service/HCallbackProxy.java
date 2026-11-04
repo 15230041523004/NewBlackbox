@@ -193,6 +193,11 @@ public class HCallbackProxy implements IInjectHook, Handler.Callback {
                 BlackBoxCore.getBActivityManager().restartProcess(activityInfo.packageName, activityInfo.processName, stubRecord.mUserId);
 
                 Intent launchIntentForPackage = BlackBoxCore.getBPackageManager().getLaunchIntentForPackage(activityInfo.packageName, stubRecord.mUserId);
+                if (launchIntentForPackage == null) {
+                    launchIntentForPackage = stubRecord.mTarget;
+                    Log.w(TAG, "No launcher activity resolved for " + activityInfo.packageName
+                            + " in profile " + stubRecord.mUserId + "; keeping the requested activity");
+                }
                 intent.setExtrasClassLoader(this.getClass().getClassLoader());
                 ProxyActivityRecord.saveStub(intent, launchIntentForPackage, stubRecord.mActivityInfo, stubRecord.mActivityRecord, stubRecord.mUserId);
                 if (BuildCompat.isPie()) {

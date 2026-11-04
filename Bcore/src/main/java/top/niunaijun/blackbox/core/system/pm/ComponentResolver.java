@@ -478,6 +478,9 @@ public class ComponentResolver {
             }
             ActivityInfo ai =
                     PackageManagerCompat.generateActivityInfo(activity, mFlags, ps.readUserState(userId), userId);
+            if (ai == null) {
+                return null;
+            }
 
             final ResolveInfo res = new ResolveInfo();
             res.activityInfo = ai;

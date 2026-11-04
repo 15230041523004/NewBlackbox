@@ -155,6 +155,16 @@ public final class GmsCallingIdentity {
         }
 
         public void connected(ComponentName name, IBinder service, boolean dead) throws RemoteException {
+            connectedInternal(name, service, null, dead, false);
+        }
+
+        /** Android 16 IServiceConnection callback. Keep the session when forwarding to LoadedApk. */
+        public void connected(ComponentName name, IBinder service, android.app.IBinderSession session, boolean dead) throws RemoteException {
+            connectedInternal(name, service, session, dead, true);
+        }
+
+        private void connectedInternal(ComponentName name, IBinder service, android.app.IBinderSession session,
+                                       boolean dead, boolean hasSession) throws RemoteException {
             IBinder delivered = service;
             if (service != null) {
                 try {
@@ -167,7 +177,11 @@ public final class GmsCallingIdentity {
                 }
             }
             if (BuildCompat.isOreo()) {
-                BRIServiceConnectionO.get(base).connected(name, delivered, dead);
+                if (hasSession) {
+                    BRIServiceConnectionO.get(base).connected(name, delivered, session, dead);
+                } else {
+                    BRIServiceConnectionO.get(base).connected(name, delivered, dead);
+                }
             } else {
                 base.connected(name, delivered);
             }

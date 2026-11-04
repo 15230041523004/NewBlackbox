@@ -198,6 +198,7 @@ public class BProcessManagerService implements ISystemService {
 
     public void onProcessDie(ProcessRecord record) {
         synchronized (mProcessLock) {
+            top.niunaijun.blackbox.core.system.tls.BTlsRouteRegistryService.get().onGuestProcessDied(record.pid);
             record.kill();
             Map<String, ProcessRecord> process = mProcessMap.get(record.buid);
             if (process != null) {

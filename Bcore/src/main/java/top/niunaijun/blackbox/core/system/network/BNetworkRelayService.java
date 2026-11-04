@@ -6,12 +6,14 @@ import android.os.RemoteException;
 import android.util.Log;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 import top.niunaijun.blackbox.core.system.BProcessManagerService;
 import top.niunaijun.blackbox.core.system.ISystemService;
 import top.niunaijun.blackbox.core.system.ProcessRecord;
+import top.niunaijun.blackbox.core.system.tls.TlsServiceSecurity;
 
 public class BNetworkRelayService extends IBNetworkRelayService.Stub implements ISystemService {
     private static final String TAG = "BNetworkRelayService";
@@ -44,6 +46,11 @@ public class BNetworkRelayService extends IBNetworkRelayService.Stub implements 
 
     private final Map<Long, GuestSession> mGuestSessions = new ConcurrentHashMap<>();
 
+    static {
+        try { System.loadLibrary("blacktwin_tls_transport"); }
+        catch (Throwable error) { Log.e(TAG, "Cannot load policy transport", error); }
+    }
+
     public static BNetworkRelayService get() {
         return sInstance;
     }
@@ -58,6 +65,7 @@ public class BNetworkRelayService extends IBNetworkRelayService.Stub implements 
 
     @Override
     public void registerMainSink(IBNetworkMainSink sink) {
+        TlsServiceSecurity.enforceMainCaller();
         synchronized (mSinkLock) {
             mMainSink = sink;
             if (sink != null) {
@@ -116,6 +124,10 @@ public class BNetworkRelayService extends IBNetworkRelayService.Stub implements 
 
     @Override
     public ParcelFileDescriptor getCurrentSnapshot() {
+        int callingPid = Binder.getCallingPid();
+        if (BProcessManagerService.get().resolveNetworkCaller(callingPid) == null) {
+            TlsServiceSecurity.enforceMainCaller();
+        }
         synchronized (mSnapshotLock) {
             if (mCurrentSnapshotFd != null) {
                 try {
@@ -130,6 +142,21 @@ public class BNetworkRelayService extends IBNetworkRelayService.Stub implements 
 
     @Override
     public void publishSnapshot(long revision, ParcelFileDescriptor fd) {
+        TlsServiceSecurity.enforceMainCaller();
+        if (fd == null || revision < 0) return;
+        byte[] snapshot;
+        try {
+            snapshot = readBounded(fd.dup(), 1_048_576);
+        } catch (IOException error) {
+            Log.e(TAG, "Cannot read policy snapshot", error);
+            try { fd.close(); } catch (IOException ignored) {}
+            return;
+        }
+        if (!nativePublishPolicy(revision, snapshot)) {
+            Log.e(TAG, "Native registry rejected policy snapshot revision " + revision);
+            try { fd.close(); } catch (IOException ignored) {}
+            throw new IllegalStateException("Native registry rejected policy snapshot");
+        }
         synchronized (mSnapshotLock) {
             if (mCurrentSnapshotFd != null) {
                 try {
@@ -154,7 +181,7 @@ public class BNetworkRelayService extends IBNetworkRelayService.Stub implements 
     @Override
     public void submitStats(long sessionId, long sequence, byte[] payload) {
         GuestSession session = mGuestSessions.get(sessionId);
-        if (session == null) {
+        if (session == null || session.pid != Binder.getCallingPid()) {
             return;
         }
 
@@ -172,7 +199,7 @@ public class BNetworkRelayService extends IBNetworkRelayService.Stub implements 
     @Override
     public void reportAppliedRevision(long sessionId, long revision, String status) {
         GuestSession session = mGuestSessions.get(sessionId);
-        if (session != null) {
+        if (session != null && session.pid == Binder.getCallingPid()) {
             notifyGuestStatus(sessionId, session.userId, session.packageName, session.processName, session.pid, revision, status);
         }
     }
@@ -186,5 +213,25 @@ public class BNetworkRelayService extends IBNetworkRelayService.Stub implements 
             }
         }
     }
+
+    private static byte[] readBounded(ParcelFileDescriptor descriptor, int limit) throws IOException {
+        try (ParcelFileDescriptor.AutoCloseInputStream input =
+                     new ParcelFileDescriptor.AutoCloseInputStream(descriptor);
+             ByteArrayOutputStream output = new ByteArrayOutputStream(8192)) {
+            byte[] buffer = new byte[8192];
+            int total = 0;
+            while (total < limit) {
+                int count = input.read(buffer, 0, Math.min(buffer.length, limit - total));
+                if (count < 0) return output.toByteArray();
+                if (count == 0) continue;
+                output.write(buffer, 0, count);
+                total += count;
+            }
+            if (input.read() >= 0) throw new IOException("Policy snapshot exceeds limit");
+            return output.toByteArray();
+        }
+    }
+
+    private static native boolean nativePublishPolicy(long expectedRevision, byte[] snapshot);
 }
 

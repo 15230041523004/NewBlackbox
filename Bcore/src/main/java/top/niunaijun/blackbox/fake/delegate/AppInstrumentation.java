@@ -3,9 +3,12 @@ package top.niunaijun.blackbox.fake.delegate;
 import android.app.Activity;
 import android.app.Application;
 import android.app.Instrumentation;
+import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.os.Bundle;
 import android.os.PersistableBundle;
 import android.util.Log;
@@ -165,7 +168,58 @@ public final class AppInstrumentation extends BaseInstrumentationDelegate implem
         try {
             return super.newActivity(cl, className, intent);
         } catch (ClassNotFoundException e) {
+            // A virtual package can retain the launcher alias but lose its targetActivity
+            // in ActivityInfo after a package/profile data reset. Android then asks us to
+            // instantiate the alias name, which is not a Java class. Resolve only a
+            // declared alias in this guest's own APK; keep the original Intent component.
+            String aliasTarget = findDeclaredAliasTarget(className, intent);
+            if (aliasTarget != null) {
+                return mBaseInstrumentation.newActivity(cl, aliasTarget, intent);
+            }
             return mBaseInstrumentation.newActivity(cl, className, intent);
         }
+    }
+
+    private String findDeclaredAliasTarget(String className, Intent intent) {
+        ComponentName component = intent == null ? null : intent.getComponent();
+        if (component == null || !component.getClassName().equals(className)) {
+            return null;
+        }
+        try {
+            ActivityInfo virtualAlias = BlackBoxCore.getBPackageManager().getActivityInfo(
+                    component, 0, BActivityThread.getUserId());
+            if (virtualAlias == null || virtualAlias.applicationInfo == null
+                    || !component.getPackageName().equals(virtualAlias.packageName)) {
+                return null;
+            }
+            String sourceDir = virtualAlias.applicationInfo.sourceDir;
+            PackageInfo archive = BlackBoxCore.getContext().getPackageManager()
+                    .getPackageArchiveInfo(sourceDir, PackageManager.GET_ACTIVITIES);
+            if (archive == null || archive.activities == null
+                    || !component.getPackageName().equals(archive.packageName)) {
+                return null;
+            }
+            String target = null;
+            for (ActivityInfo activity : archive.activities) {
+                if (className.equals(activity.name)) {
+                    target = activity.targetActivity;
+                    break;
+                }
+            }
+            if (target == null || target.equals(className)) {
+                return null;
+            }
+            ComponentName targetComponent = new ComponentName(component.getPackageName(), target);
+            ActivityInfo virtualTarget = BlackBoxCore.getBPackageManager().getActivityInfo(
+                    targetComponent, 0, BActivityThread.getUserId());
+            if (virtualTarget != null && target.equals(virtualTarget.name)
+                    && virtualTarget.targetActivity == null) {
+                Log.i(TAG, "Resolved guest activity alias " + className + " to declared target " + target);
+                return target;
+            }
+        } catch (RuntimeException exception) {
+            Log.w(TAG, "Could not resolve guest activity alias " + className, exception);
+        }
+        return null;
     }
 }

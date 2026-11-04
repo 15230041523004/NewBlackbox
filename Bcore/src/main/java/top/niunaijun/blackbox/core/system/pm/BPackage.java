@@ -150,7 +150,6 @@ public class BPackage implements Parcelable {
             activity.owner = this;
             this.activities.add(activity);
         }
-
         N = in.readInt();
         this.receivers = new ArrayList<>(N);
         while (N-- > 0) {
@@ -161,7 +160,6 @@ public class BPackage implements Parcelable {
             activity.owner = this;
             this.receivers.add(activity);
         }
-
         N = in.readInt();
         this.providers = new ArrayList<>(N);
         while (N-- > 0) {
@@ -172,7 +170,6 @@ public class BPackage implements Parcelable {
             provider.owner = this;
             this.providers.add(provider);
         }
-
         N = in.readInt();
         this.services = new ArrayList<>(N);
         while (N-- > 0) {
@@ -183,7 +180,6 @@ public class BPackage implements Parcelable {
             service.owner = this;
             this.services.add(service);
         }
-
         N = in.readInt();
         this.instrumentation = new ArrayList<>(N);
         while (N-- > 0) {
@@ -191,7 +187,6 @@ public class BPackage implements Parcelable {
             instrumentation.owner = this;
             this.instrumentation.add(instrumentation);
         }
-
         N = in.readInt();
         this.permissions = new ArrayList<>(N);
         while (N-- > 0) {
@@ -199,7 +194,6 @@ public class BPackage implements Parcelable {
             permission.owner = this;
             this.permissions.add(permission);
         }
-
         N = in.readInt();
         this.permissionGroups = new ArrayList<>(N);
         while (N-- > 0) {
@@ -207,7 +201,6 @@ public class BPackage implements Parcelable {
             permissionGroup.owner = this;
             this.permissionGroups.add(permissionGroup);
         }
-
         in.readStringList(this.requestedPermissions);
         if (BuildCompat.isPie()) {
             this.mSigningDetails = in.readParcelable(SigningDetails.class.getClassLoader());

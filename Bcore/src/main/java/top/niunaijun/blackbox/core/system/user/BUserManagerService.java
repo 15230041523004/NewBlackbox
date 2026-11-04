@@ -16,6 +16,7 @@ import java.util.List;
 
 import top.niunaijun.blackbox.core.env.BEnvironment;
 import top.niunaijun.blackbox.core.system.ISystemService;
+import top.niunaijun.blackbox.core.system.am.BActivityManagerService;
 import top.niunaijun.blackbox.core.system.pm.BPackageManagerService;
 import top.niunaijun.blackbox.utils.CloseUtils;
 import top.niunaijun.blackbox.utils.FileUtils;
@@ -88,6 +89,7 @@ public class BUserManagerService extends IBUserManagerService.Stub implements IS
                     throw new IllegalStateException("Cannot remove profile environment policy", e);
                 }
                 BPackageManagerService.get().deleteUser(userId);
+                BActivityManagerService.get().onUserRemoved(userId);
 
                 mUsers.remove(userId);
                 saveUserInfoLocked();
@@ -102,6 +104,7 @@ public class BUserManagerService extends IBUserManagerService.Stub implements IS
         bUserInfo.id = userId;
         bUserInfo.status = BUserStatus.ENABLE;
         mUsers.put(userId, bUserInfo);
+        BActivityManagerService.get().onUserCreated(userId);
         synchronized (mUsers) {
             saveUserInfoLocked();
         }

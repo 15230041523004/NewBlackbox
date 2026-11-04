@@ -42,6 +42,21 @@ public class BActivityManagerService extends IBActivityManagerService.Stub imple
         return sService;
     }
 
+    /** Drop any retired task/service state before a virtual user ID starts a new incarnation. */
+    public void onUserCreated(int userId) {
+        resetUserSpace(userId);
+    }
+
+    public void onUserRemoved(int userId) {
+        resetUserSpace(userId);
+    }
+
+    private void resetUserSpace(int userId) {
+        synchronized (mUserSpace) {
+            mUserSpace.remove(userId);
+        }
+    }
+
     public BActivityManagerService() {
         mBroadcastManager = BroadcastManager.startSystem(this, mPms);
     }
