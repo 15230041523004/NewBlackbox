@@ -273,7 +273,12 @@ public class BActivityThread extends IBActivityThread.Stub {
         ClassLoader classLoader = BRLoadedApk.get(mBoundApplication.info).getClassLoader();
         JobService service;
         try {
-            service = (JobService) classLoader.loadClass(serviceInfo.name).newInstance();
+            Class<?> aClass = classLoader.loadClass(serviceInfo.name);
+            if (!JobService.class.isAssignableFrom(aClass)) {
+                Slog.w(TAG, "Service " + serviceInfo.name + " is not a JobService, skipping");
+                return null;
+            }
+            service = (JobService) aClass.newInstance();
         } catch (ClassNotFoundException e) {
             
             if (serviceInfo.name.contains("google.android.gms") || 
@@ -531,6 +536,7 @@ public class BActivityThread extends IBActivityThread.Stub {
 
             onBeforeApplicationOnCreate(packageName, processName, application);
             top.niunaijun.blackbox.fake.service.GuestFrameClock.watch(application);
+            top.niunaijun.blackbox.fake.service.GuestWebRtcHooks.install(application);
             AppInstrumentation.get().callApplicationOnCreate(application);
             onAfterApplicationOnCreate(packageName, processName, application);
 

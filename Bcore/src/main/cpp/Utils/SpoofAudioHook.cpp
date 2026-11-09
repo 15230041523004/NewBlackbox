@@ -261,13 +261,17 @@ void SilenceFrame(AudioFrame &frame) {
 void ApplyNeuralVc(AudioFrame &frame) {
     JavaVM *vm = BoxCore::getJavaVM();
     if (vm == nullptr) {
-        SilenceFrame(frame);
+        if (g_underflow_silence.load(std::memory_order_relaxed)) {
+            SilenceFrame(frame);
+        }
         return;
     }
     JNIEnv *env = nullptr;
     if (vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) != JNI_OK) {
         if (vm->AttachCurrentThread(&env, nullptr) != JNI_OK || env == nullptr) {
-            SilenceFrame(frame);
+            if (g_underflow_silence.load(std::memory_order_relaxed)) {
+                SilenceFrame(frame);
+            }
             return;
         }
     }
@@ -276,12 +280,16 @@ void ApplyNeuralVc(AudioFrame &frame) {
     }
     if (g_bridge_class == nullptr || g_bridge_process == nullptr
             || g_direct_in == nullptr || g_direct_out == nullptr) {
-        SilenceFrame(frame);
+        if (g_underflow_silence.load(std::memory_order_relaxed)) {
+            SilenceFrame(frame);
+        }
         return;
     }
     const int count = frame.frames * frame.channels;
     if (count <= 0 || count > static_cast<int>(kMaxSamples)) {
-        SilenceFrame(frame);
+        if (g_underflow_silence.load(std::memory_order_relaxed)) {
+            SilenceFrame(frame);
+        }
         return;
     }
     std::copy_n(frame.samples.begin(), count, g_neural_in.begin());
@@ -290,7 +298,9 @@ void ApplyNeuralVc(AudioFrame &frame) {
                               frame.frames, frame.channels, frame.sample_rate);
     if (env->ExceptionCheck()) {
         env->ExceptionClear();
-        SilenceFrame(frame);
+        if (g_underflow_silence.load(std::memory_order_relaxed)) {
+            SilenceFrame(frame);
+        }
         return;
     }
     std::copy_n(g_neural_out.begin(), count, frame.samples.begin());
@@ -400,8 +410,7 @@ void ProcessLive(void *buffer, int frames, int channels, bool as_float, int samp
     AudioFrame output;
     if (!g_output_ring.read(output) || output.frames != frames || output.channels != channels) {
         g_underflows.fetch_add(1, std::memory_order_relaxed);
-        int current_mode = g_mode.load(std::memory_order_relaxed);
-        if (current_mode == MODE_DSP || current_mode == MODE_NEURAL || g_underflow_silence.load(std::memory_order_relaxed)) {
+        if (g_underflow_silence.load(std::memory_order_relaxed)) {
             memset(buffer, 0, static_cast<size_t>(count) * (as_float ? sizeof(float) : sizeof(int16_t)));
         }
         return;

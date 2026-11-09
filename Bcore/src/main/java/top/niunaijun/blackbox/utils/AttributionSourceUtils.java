@@ -23,6 +23,8 @@ public class AttributionSourceUtils {
                 } catch (Exception e) {
                     Slog.w(TAG, "Failed to fix AttributionSource in args: " + e.getMessage());
                 }
+            } else if (arg instanceof String && ((String) arg).isEmpty()) {
+                args[i] = null;
             }
         }
         
@@ -90,6 +92,16 @@ public class AttributionSourceUtils {
                 } catch (Throwable ignored) {
                 }
             }
+
+            String[] tagFieldNames = {"mAttributionTag", "attributionTag"};
+            for (String fieldName : tagFieldNames) {
+                try {
+                    java.lang.reflect.Field tagField = attributionSourceClass.getDeclaredField(fieldName);
+                    tagField.setAccessible(true);
+                    tagField.set(attributionSource, null);
+                } catch (Throwable ignored) {
+                }
+            }
             
         } catch (Throwable e) {
             Slog.w(TAG, "Error fixing AttributionSource UID: " + e.getMessage());
@@ -130,33 +142,40 @@ public class AttributionSourceUtils {
     
     public static Object createSafeAttributionSource() {
         try {
-            
+            Class<?> builderClass = Class.forName("android.content.AttributionSource$Builder");
+            java.lang.reflect.Constructor<?> builderCtor = builderClass.getDeclaredConstructor(int.class);
+            builderCtor.setAccessible(true);
+            Object builder = builderCtor.newInstance(BlackBoxCore.getHostUid());
+            java.lang.reflect.Method setPkgMethod = builderClass.getMethod("setPackageName", String.class);
+            setPkgMethod.invoke(builder, BlackBoxCore.getHostPkg());
+            java.lang.reflect.Method buildMethod = builderClass.getMethod("build");
+            Object source = buildMethod.invoke(builder);
+            if (source != null) {
+                fixAttributionSourceUid(source);
+                return source;
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
             Class<?> attributionSourceClass = Class.forName("android.content.AttributionSource");
-            
-            
-            Object attributionSource = null;
-            
+            java.lang.reflect.Constructor<?> constructor = null;
             try {
-                
-                java.lang.reflect.Constructor<?> constructor = attributionSourceClass.getDeclaredConstructor(int.class, String.class);
+                constructor = attributionSourceClass.getDeclaredConstructor(int.class, String.class, String.class);
                 constructor.setAccessible(true);
-                attributionSource = constructor.newInstance(BlackBoxCore.getHostUid(), BlackBoxCore.getHostPkg());
-            } catch (Exception e) {
+                return constructor.newInstance(BlackBoxCore.getHostUid(), BlackBoxCore.getHostPkg(), null);
+            } catch (Throwable t) {
                 try {
-                    
-                    java.lang.reflect.Constructor<?> constructor = attributionSourceClass.getDeclaredConstructor();
+                    constructor = attributionSourceClass.getDeclaredConstructor(int.class, String.class);
                     constructor.setAccessible(true);
-                    attributionSource = constructor.newInstance();
-                    
-                    
-                    fixAttributionSourceUid(attributionSource);
-                } catch (Exception e2) {
-                    Slog.w(TAG, "Could not create safe AttributionSource: " + e2.getMessage());
-                    return null;
+                    return constructor.newInstance(BlackBoxCore.getHostUid(), BlackBoxCore.getHostPkg());
+                } catch (Throwable t2) {
+                    constructor = attributionSourceClass.getDeclaredConstructor();
+                    constructor.setAccessible(true);
+                    Object obj = constructor.newInstance();
+                    fixAttributionSourceUid(obj);
+                    return obj;
                 }
             }
-            
-            return attributionSource;
         } catch (Exception e) {
             Slog.w(TAG, "Error creating safe AttributionSource: " + e.getMessage());
             return null;

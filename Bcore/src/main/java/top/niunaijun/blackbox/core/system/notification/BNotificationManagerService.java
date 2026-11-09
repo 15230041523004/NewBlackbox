@@ -26,10 +26,12 @@ import top.niunaijun.blackbox.BlackBoxCore;
 import top.niunaijun.blackbox.core.system.BProcessManagerService;
 import top.niunaijun.blackbox.core.system.ISystemService;
 import top.niunaijun.blackbox.core.system.ProcessRecord;
+import top.niunaijun.blackbox.utils.Slog;
 import top.niunaijun.blackbox.utils.compat.BuildCompat;
 
 
 public class BNotificationManagerService extends IBNotificationManagerService.Stub implements ISystemService {
+    public static final String TAG = "BNotificationManagerService";
     private final static BNotificationManagerService sService = new BNotificationManagerService();
     public static final String CHANNEL_BLACK = "@black-";
     public static final String GROUP_BLACK = "@black-group-";
@@ -190,7 +192,22 @@ public class BNotificationManagerService extends IBNotificationManagerService.St
         synchronized (notificationRecord.mIds) {
             notificationRecord.mIds.add(notificationId);
         }
-        mRealNotificationManager.notify(notificationId, notification);
+        try {
+            mRealNotificationManager.notify(notificationId, notification);
+        } catch (Throwable t) {
+            Slog.w(TAG, "Failed to post notification (" + notificationId + "): " + t.getMessage());
+            // Android 14+ enforces that CallStyle notifications require a phoneCall FGS or fullScreenIntent.
+            // In containerized environment, demote CallStyle to standard notification and retry.
+            try {
+                if (notification != null && notification.extras != null &&
+                        "android.app.Notification$CallStyle".equals(notification.extras.getString(Notification.EXTRA_TEMPLATE))) {
+                    notification.extras.remove(Notification.EXTRA_TEMPLATE);
+                    mRealNotificationManager.notify(notificationId, notification);
+                }
+            } catch (Throwable fallbackError) {
+                Slog.w(TAG, "Fallback notification post failed: " + fallbackError.getMessage());
+            }
+        }
     }
 
     @Override

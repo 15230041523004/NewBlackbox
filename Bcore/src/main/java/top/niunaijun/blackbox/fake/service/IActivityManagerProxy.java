@@ -813,15 +813,23 @@ public class IActivityManagerProxy extends ClassInvocationStub {
     public static class setServiceForeground extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            
-            
             for (int i = args.length - 1; i >= 0; i--) {
                 if (args[i] instanceof Integer) {
                     args[i] = 0; 
                     break;
                 }
             }
-            return method.invoke(who, args);
+            android.app.Notification notification = MethodParameterUtils.getFirstParam(args, android.app.Notification.class);
+            if (notification != null && notification.extras != null &&
+                    "android.app.Notification$CallStyle".equals(notification.extras.getString(android.app.Notification.EXTRA_TEMPLATE))) {
+                notification.extras.remove(android.app.Notification.EXTRA_TEMPLATE);
+            }
+            try {
+                return method.invoke(who, args);
+            } catch (Throwable t) {
+                top.niunaijun.blackbox.utils.Slog.w(TAG, "setServiceForeground error: " + t.getMessage());
+                return 0;
+            }
         }
     }
 

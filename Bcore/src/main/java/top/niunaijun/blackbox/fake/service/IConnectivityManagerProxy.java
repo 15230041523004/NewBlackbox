@@ -11,7 +11,10 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Array;
 import java.net.InetAddress;
+import java.net.NetworkInterface;
+import java.net.InterfaceAddress;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
 
 import black.android.net.BRIConnectivityManagerStub;
@@ -54,6 +57,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
         MethodParameterUtils.replaceAllAppPkg(args);
         AttributionSourceUtils.fixAttributionSourceInArgs(args);
+        rewriteCallingPackage(args);
         try {
             boolean guest = GuestNetworkView.isGuest();
             if (guest) GuestNetworkView.wrapCallbacks(getBase(), args);
@@ -247,27 +251,97 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     }
 
     
-    private static Object createLinkProperties() {
+    public static Object createLinkProperties() {
         try {
-            
+            ConnectivityManager cm = (ConnectivityManager) BlackBoxCore.getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                Network activeNet = cm.getActiveNetwork();
+                if (activeNet != null) {
+                    LinkProperties lp = cm.getLinkProperties(activeNet);
+                    if (lp != null && lp.getLinkAddresses() != null && !lp.getLinkAddresses().isEmpty()) {
+                        return lp;
+                    }
+                }
+                Network[] allNetworks = cm.getAllNetworks();
+                if (allNetworks != null) {
+                    for (Network net : allNetworks) {
+                        LinkProperties lp = cm.getLinkProperties(net);
+                        if (lp != null && lp.getLinkAddresses() != null && !lp.getLinkAddresses().isEmpty()) {
+                            return lp;
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Slog.w(TAG, "Failed to get host LinkProperties: " + t.getMessage());
+        }
+
+        try {
             Class<?> linkPropertiesClass = Class.forName("android.net.LinkProperties");
             Constructor<?> constructor = linkPropertiesClass.getDeclaredConstructor();
             constructor.setAccessible(true);
             Object linkProperties = constructor.newInstance();
-            
-            
-            java.util.List<java.net.InetAddress> dnsServers = new java.util.ArrayList<>();
+
+            Method setInterfaceNameMethod = linkPropertiesClass.getMethod("setInterfaceName", String.class);
+            Method addLinkAddressMethod = null;
+            Constructor<?> linkAddressConstructor = null;
             try {
-                dnsServers.add(java.net.InetAddress.getByName("8.8.8.8"));
-                dnsServers.add(java.net.InetAddress.getByName("8.8.4.4"));
-                
-                
-                Method setDnsServersMethod = linkProperties.getClass().getMethod("setDnsServers", java.util.List.class);
-                setDnsServersMethod.invoke(linkProperties, dnsServers);
-            } catch (Exception e) {
-                Slog.w(TAG, "Could not set DNS servers: " + e.getMessage());
+                Class<?> linkAddressClass = Class.forName("android.net.LinkAddress");
+                addLinkAddressMethod = linkPropertiesClass.getMethod("addLinkAddress", linkAddressClass);
+                linkAddressConstructor = linkAddressClass.getDeclaredConstructor(InetAddress.class, int.class);
+                linkAddressConstructor.setAccessible(true);
+            } catch (Throwable ignored) {
             }
-            
+
+            boolean addedAddress = false;
+            try {
+                Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+                if (interfaces != null) {
+                    while (interfaces.hasMoreElements()) {
+                        NetworkInterface nif = interfaces.nextElement();
+                        if (nif.isLoopback() || !nif.isUp()) continue;
+                        String ifName = nif.getName();
+                        if (ifName != null && (ifName.startsWith("wlan") || ifName.startsWith("rmnet") || ifName.startsWith("eth") || ifName.startsWith("dummy"))) {
+                            setInterfaceNameMethod.invoke(linkProperties, ifName);
+                            if (addLinkAddressMethod != null && linkAddressConstructor != null) {
+                                for (InterfaceAddress ia : nif.getInterfaceAddresses()) {
+                                    InetAddress addr = ia.getAddress();
+                                    if (addr != null && !addr.isLoopbackAddress()) {
+                                        Object linkAddr = linkAddressConstructor.newInstance(addr, (int) ia.getNetworkPrefixLength());
+                                        addLinkAddressMethod.invoke(linkProperties, linkAddr);
+                                        addedAddress = true;
+                                    }
+                                }
+                            }
+                            if (addedAddress) break;
+                        }
+                    }
+                }
+            } catch (Throwable t) {
+                Slog.w(TAG, "Failed to enumerate network interfaces: " + t.getMessage());
+            }
+
+            if (!addedAddress) {
+                setInterfaceNameMethod.invoke(linkProperties, "wlan0");
+                if (addLinkAddressMethod != null && linkAddressConstructor != null) {
+                    try {
+                        InetAddress dummyAddr = InetAddress.getByName("192.168.1.100");
+                        Object linkAddr = linkAddressConstructor.newInstance(dummyAddr, 24);
+                        addLinkAddressMethod.invoke(linkProperties, linkAddr);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+
+            List<InetAddress> dnsServers = new ArrayList<>();
+            try {
+                dnsServers.add(InetAddress.getByName("8.8.8.8"));
+                dnsServers.add(InetAddress.getByName("8.8.4.4"));
+                Method setDnsServersMethod = linkProperties.getClass().getMethod("setDnsServers", List.class);
+                setDnsServersMethod.invoke(linkProperties, dnsServers);
+            } catch (Exception ignored) {
+            }
+
             return linkProperties;
         } catch (Exception e) {
             Slog.w(TAG, "Failed to create LinkProperties via reflection: " + e.getMessage());
@@ -347,9 +421,15 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         if (args == null) return;
         String guest = BActivityThread.getAppPackageName();
         String host = BlackBoxCore.getHostPkg();
-        if (guest == null || host == null || guest.equals(host)) return;
         for (int i = 0; i < args.length; i++) {
-            if (guest.equals(args[i])) args[i] = host;
+            if (guest != null && guest.equals(args[i])) {
+                args[i] = host;
+                if (i + 1 < args.length && args[i + 1] instanceof String) {
+                    args[i + 1] = null;
+                }
+            } else if (args[i] instanceof String && ((String) args[i]).isEmpty()) {
+                args[i] = null;
+            }
         }
     }
 
@@ -359,70 +439,32 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             rewriteCallingPackage(args);
             try {
-                
                 Object result = method.invoke(who, args);
-                if (result != null) {
-                    
-                    if (Array.getLength(result) > 0) {
-                         return result;
+                if (result != null && Array.getLength(result) > 0) {
+                    return result;
+                }
+            } catch (Exception ignored) {
+            }
+
+            try {
+                ConnectivityManager cm = (ConnectivityManager) BlackBoxCore.getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    Network[] networks = cm.getAllNetworks();
+                    if (networks != null && networks.length > 0) {
+                        return networks;
+                    }
+                    Network active = cm.getActiveNetwork();
+                    if (active != null) {
+                        return new Network[]{active};
                     }
                 }
-            } catch (Exception e) {
-                
+            } catch (Throwable t) {
+                Slog.w(TAG, "Failed to get networks from host ConnectivityManager", t);
             }
-
-            Slog.d(TAG, "Creating fallback Network[] for getAllNetworks");
-            
-            
-            try {
-                 
-                 Method getActiveNetworkMethod = null;
-                 try {
-                     getActiveNetworkMethod = who.getClass().getMethod("getActiveNetwork");
-                 } catch (NoSuchMethodException e) {
-                     
-                     for (Method m : who.getClass().getMethods()) {
-                         if (m.getName().equals("getActiveNetwork")) {
-                             getActiveNetworkMethod = m;
-                             break;
-                         }
-                     }
-                 }
-
-                 if (getActiveNetworkMethod != null) {
-                     Object activeNetwork = getActiveNetworkMethod.invoke(who);
-                     if (activeNetwork != null) {
-                         Class<?> networkClass = activeNetwork.getClass();
-                         Object networkArray = Array.newInstance(networkClass, 1);
-                         Array.set(networkArray, 0, activeNetwork);
-                         Slog.d(TAG, "Refilled getAllNetworks with Active Network: " + activeNetwork);
-                         return networkArray;
-                     }
-                 }
-            } catch (Exception e) {
-                 Slog.w(TAG, "Failed to use Active Network for fallback: " + e.getMessage());
-            }
-
-            
-            try {
-                Class<?> networkClass = Class.forName("android.net.Network");
-                Object networkArray = Array.newInstance(networkClass, 1);
-                
-                
-                
-                Constructor<?> constructor = networkClass.getConstructor(int.class);
-                Object network = constructor.newInstance(1);
-                
-                Array.set(networkArray, 0, network);
-                return networkArray;
-            } catch (Exception e) {
-                 Slog.w(TAG, "Failed to create fallback Network[]: " + e.getMessage());
-                 return method.invoke(who, args);
-            }
+            return new Network[0];
         }
     }
 
-    
     @ProxyMethod("getNetworkCapabilities")
     public static class GetNetworkCapabilities extends MethodHook {
         @Override
@@ -432,17 +474,28 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
             rewriteCallingPackage(args);
             if (android.os.Build.VERSION.SDK_INT >= 21) {
                 try {
-                    
                     Object result = method.invoke(who, args);
                     if (result != null) {
                         return markValidatedInternet(result);
                     }
+                } catch (Exception ignored) {
+                }
 
-                    
-                    Object nc;
-                    
-                    nc = IConnectivityManagerProxy.createNetworkCapabilities();
-                    
+                if (args != null && args.length > 0 && args[0] instanceof Network) {
+                    try {
+                        ConnectivityManager cm = (ConnectivityManager) BlackBoxCore.getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+                        if (cm != null) {
+                            NetworkCapabilities caps = cm.getNetworkCapabilities((Network) args[0]);
+                            if (caps != null) {
+                                return markValidatedInternet(caps);
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+
+                try {
+                    Object nc = IConnectivityManagerProxy.createNetworkCapabilities();
                     if (nc != null) {
                         Slog.d(TAG, "Created enhanced NetworkCapabilities for sandboxed app (fallback)");
                         return nc;
@@ -455,17 +508,32 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         }
     }
 
-    
     @ProxyMethod("getActiveNetwork")
     public static class GetActiveNetwork extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             rewriteCallingPackage(args);
-            return method.invoke(who, args);
+            try {
+                Object result = method.invoke(who, args);
+                if (result != null) {
+                    return result;
+                }
+            } catch (Throwable ignored) {
+            }
+            try {
+                ConnectivityManager cm = (ConnectivityManager) BlackBoxCore.getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null) {
+                    Network net = cm.getActiveNetwork();
+                    if (net != null) {
+                        return net;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            return null;
         }
     }
 
-    
     @ProxyMethod("getActiveNetworkInfo")
     public static class GetActiveNetworkInfo extends MethodHook {
         @Override
@@ -474,26 +542,22 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
             try {
                 Object result = method.invoke(who, args);
                 if (result != null) {
-                    
                     try {
                         Method setDetailedState = result.getClass().getMethod("setDetailedState", 
                              android.net.NetworkInfo.DetailedState.class, String.class, String.class);
                         setDetailedState.setAccessible(true);
                         setDetailedState.invoke(result, android.net.NetworkInfo.DetailedState.CONNECTED, null, null);
-                    } catch (Exception e) {
-                         
+                    } catch (Exception ignored) {
                     }
                     return result;
                 }
-            } catch (Exception e) {
-                
+            } catch (Exception ignored) {
             }
             Slog.d(TAG, "Creating fallback NetworkInfo for getActiveNetworkInfo");
             return createNetworkInfo(ConnectivityManager.TYPE_WIFI, 0, "WIFI", "");
         }
     }
 
-    
     @ProxyMethod("getLinkProperties")
     public static class GetLinkProperties extends MethodHook {
         @Override
@@ -501,29 +565,68 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
             rewriteCallingPackage(args);
             if (android.os.Build.VERSION.SDK_INT >= 21) {
                 try {
-                    
                     Object result = method.invoke(who, args);
                     if (result != null) {
-                        return result;
+                        try {
+                            List<?> addresses = (List<?>) result.getClass().getMethod("getLinkAddresses").invoke(result);
+                            if (addresses != null && !addresses.isEmpty()) {
+                                return result;
+                            }
+                        } catch (Throwable ignored) {
+                            return result;
+                        }
                     }
 
-                    
+                    if (args != null && args.length > 0 && args[0] instanceof Network) {
+                        try {
+                            ConnectivityManager cm = (ConnectivityManager) BlackBoxCore.getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+                            if (cm != null) {
+                                LinkProperties lp = cm.getLinkProperties((Network) args[0]);
+                                if (lp != null && lp.getLinkAddresses() != null && !lp.getLinkAddresses().isEmpty()) {
+                                    return lp;
+                                }
+                            }
+                        } catch (Throwable ignored) {
+                        }
+                    }
+
                     Object linkProperties = IConnectivityManagerProxy.createLinkProperties();
-                    
                     if (linkProperties != null) {
-                        Slog.d(TAG, "Created LinkProperties with DNS configuration for sandboxed app (fallback)");
+                        Slog.d(TAG, "Created LinkProperties with DNS/IP configuration for sandboxed app (fallback)");
                         return linkProperties;
                     }
                 } catch (Exception e) {
-                    Slog.w(TAG, "Error creating LinkProperties: " + e.getMessage());
+                    Slog.w(TAG, "Error in GetLinkProperties: " + e.getMessage());
                 }
             }
-            return method.invoke(who, args);
+            return IConnectivityManagerProxy.createLinkProperties();
         }
     }
 
-    
-    @ProxyMethod("getPrivateDnsServerName")
+    @ProxyMethod("getLinkPropertiesForType")
+    public static class GetLinkPropertiesForType extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            rewriteCallingPackage(args);
+            try {
+                Object result = method.invoke(who, args);
+                if (result != null) {
+                    try {
+                        List<?> addresses = (List<?>) result.getClass().getMethod("getLinkAddresses").invoke(result);
+                        if (addresses != null && !addresses.isEmpty()) {
+                            return result;
+                        }
+                    } catch (Throwable ignored) {
+                        return result;
+                    }
+                }
+            } catch (Throwable ignored) {
+            }
+            return IConnectivityManagerProxy.createLinkProperties();
+        }
+    }
+
+        @ProxyMethod("getPrivateDnsServerName")
     public static class GetPrivateDnsServerName extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
@@ -624,6 +727,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Slog.d(TAG, "Intercepting registerNetworkCallback for internet access");
+            rewriteCallingPackage(args);
             try {
                 
                 Object result = method.invoke(who, args);
@@ -643,6 +747,7 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Slog.d(TAG, "Intercepting registerDefaultNetworkCallback for internet access");
+            rewriteCallingPackage(args);
             try {
                 
                 Object result = method.invoke(who, args);
@@ -812,11 +917,21 @@ public class IConnectivityManagerProxy extends BinderInvocationStub {
     }
 
     
+    @ProxyMethod("listenForNetwork")
+    public static class ListenForNetwork extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            rewriteCallingPackage(args);
+            return method.invoke(who, args);
+        }
+    }
+
     @ProxyMethod("registerNetworkCallback")
     public static class RegisterNetworkCallbackWithRequest extends MethodHook {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Slog.d(TAG, "Intercepting registerNetworkCallback with NetworkRequest for internet access");
+            rewriteCallingPackage(args);
             try {
                 
                 Object result = method.invoke(who, args);

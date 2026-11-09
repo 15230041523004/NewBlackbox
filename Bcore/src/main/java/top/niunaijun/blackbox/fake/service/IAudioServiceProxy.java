@@ -82,6 +82,20 @@ public class IAudioServiceProxy extends BinderInvocationStub {
         return false;
     }
 
+    @Override
+    public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+        top.niunaijun.blackbox.utils.MethodParameterUtils.replaceAllAppPkg(args);
+        top.niunaijun.blackbox.utils.AttributionSourceUtils.fixAttributionSourceInArgs(args);
+        if (args != null) {
+            for (int i = 0; i < args.length; i++) {
+                if (args[i] instanceof String && ((String) args[i]).isEmpty()) {
+                    args[i] = null;
+                }
+            }
+        }
+        return super.invoke(proxy, method, args);
+    }
+
     
     @ProxyMethod("isMicrophoneMuted")
     public static class IsMicrophoneMuted extends MethodHook {
@@ -216,6 +230,105 @@ public class IAudioServiceProxy extends BinderInvocationStub {
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
             Slog.d(TAG, "AudioService: abandonAudioFocus called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("setMode")
+    public static class SetMode extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: setMode called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("getMode")
+    public static class GetMode extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: getMode called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("setStreamVolume")
+    public static class SetStreamVolume extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: setStreamVolume called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("getStreamVolume")
+    public static class GetStreamVolume extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: getStreamVolume called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("getStreamMaxVolume")
+    public static class GetStreamMaxVolume extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: getStreamMaxVolume called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("setStreamMute")
+    public static class SetStreamMute extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: setStreamMute called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("isStreamMute")
+    public static class IsStreamMute extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: isStreamMute called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("setSpeakerphoneOn")
+    public static class SetSpeakerphoneOn extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: setSpeakerphoneOn called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("isSpeakerphoneOn")
+    public static class IsSpeakerphoneOn extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: isSpeakerphoneOn called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("setBluetoothScoOn")
+    public static class SetBluetoothScoOn extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: setBluetoothScoOn called, allowing");
+            return method.invoke(who, args);
+        }
+    }
+
+    @ProxyMethod("isBluetoothScoOn")
+    public static class IsBluetoothScoOn extends MethodHook {
+        @Override
+        protected Object hook(Object who, Method method, Object[] args) throws Throwable {
+            Slog.d(TAG, "AudioService: isBluetoothScoOn called, allowing");
             return method.invoke(who, args);
         }
     }

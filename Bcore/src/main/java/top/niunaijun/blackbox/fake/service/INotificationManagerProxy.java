@@ -120,10 +120,18 @@ public class INotificationManagerProxy extends BinderInvocationStub {
 
         @Override
         protected Object hook(Object who, Method method, Object[] args) throws Throwable {
-            String tag = (String) args[getTagIndex()];
-            int id = (int) args[getIdIndex()];
-            Notification notification = MethodParameterUtils.getFirstParam(args, Notification.class);
-            BNotificationManager.get().enqueueNotificationWithTag(id, tag, notification);
+            try {
+                String tag = (String) args[getTagIndex()];
+                int id = (int) args[getIdIndex()];
+                Notification notification = MethodParameterUtils.getFirstParam(args, Notification.class);
+                if (notification != null && notification.extras != null &&
+                        "android.app.Notification$CallStyle".equals(notification.extras.getString(Notification.EXTRA_TEMPLATE))) {
+                    notification.extras.remove(Notification.EXTRA_TEMPLATE);
+                }
+                BNotificationManager.get().enqueueNotificationWithTag(id, tag, notification);
+            } catch (Throwable t) {
+                top.niunaijun.blackbox.utils.Slog.w(TAG, "enqueueNotificationWithTag suppressed error: " + t.getMessage());
+            }
             return 0;
         }
 
