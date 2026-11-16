@@ -31,13 +31,16 @@ public class AppSpoofConfig {
     public final float micPitchSemitones;
     public final float micFormantShift;
     public final boolean micUnderflowSilence;
+    public final boolean micFineTune;
+    public final float micIndexRate;
     public final String micBackend;
 
     private AppSpoofConfig(boolean grantCamera, boolean grantMic, boolean grantSensors,
                            boolean cameraAudioFromVideo, boolean cameraFillFrame,
                            String micMode, String micProfile, float micInputGain,
                            float micPitchSemitones, float micFormantShift,
-                           boolean micUnderflowSilence, String micBackend) {
+                           boolean micUnderflowSilence, boolean micFineTune,
+                           float micIndexRate, String micBackend) {
         this.grantCamera = grantCamera;
         this.grantMic = grantMic;
         this.grantSensors = grantSensors;
@@ -49,6 +52,8 @@ public class AppSpoofConfig {
         this.micPitchSemitones = micPitchSemitones;
         this.micFormantShift = micFormantShift;
         this.micUnderflowSilence = micUnderflowSilence;
+        this.micFineTune = micFineTune;
+        this.micIndexRate = micIndexRate;
         this.micBackend = micBackend != null ? micBackend : "auto";
     }
 
@@ -76,12 +81,14 @@ public class AppSpoofConfig {
             if ("dsp".equals(mode) || "neural".equals(mode)) {
                 silenceUnderflow = true;
             }
+            boolean fineTune = o.optBoolean("mic_fine_tune", false);
+            float indexRate = clamp((float) o.optDouble("mic_index_rate", 0.75), 0f, 1f);
             String backend = o.optString("mic_backend", "auto");
             return new AppSpoofConfig(cam, mic, sens,
                     "video".equals(o.optString("camera_audio_source", "microphone")),
                     "fill".equals(o.optString("camera_scale_mode", "fit")),
                     mode, profile, gain, pitch, formant,
-                    silenceUnderflow, backend);
+                    silenceUnderflow, fineTune, indexRate, backend);
         } catch (Exception e) {
             Slog.w("AppSpoofConfig", "Failed to parse config: " + e.getMessage());
             return defaults();
@@ -111,7 +118,7 @@ public class AppSpoofConfig {
 
     private static AppSpoofConfig defaults() {
         return new AppSpoofConfig(true, true, true, false, false,
-                "file", "female", 1f, 4f, 0.25f, false, "auto");
+                "file", "female", 1f, 4f, 0.25f, false, false, 0.75f, "auto");
     }
 
     private static String normalizeMode(String value) {

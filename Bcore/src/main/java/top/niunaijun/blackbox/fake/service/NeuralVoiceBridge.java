@@ -22,6 +22,7 @@ public final class NeuralVoiceBridge {
     private static volatile Method sPullDirectMethod = null;
     private static volatile Method sIsLoadedMethod = null;
     private static volatile Method sSelectVoiceMethod = null;
+    private static volatile Method sSetFineTuneMethod = null;
 
     private static volatile String sCurrentPkg = null;
     private static volatile String sCurrentProfile = null;
@@ -44,6 +45,7 @@ public final class NeuralVoiceBridge {
         sPullDirectMethod = null;
         sIsLoadedMethod = null;
         sSelectVoiceMethod = null;
+        sSetFineTuneMethod = null;
 
         if (engine != null) {
             try {
@@ -75,6 +77,10 @@ public final class NeuralVoiceBridge {
                 try {
                     sSelectVoiceMethod = cls.getMethod("selectVoice", String.class);
                 } catch (Throwable ignored) {}
+                try {
+                    sSetFineTuneMethod = cls.getMethod(
+                            "setFineTune", float.class, float.class, float.class, boolean.class);
+                } catch (Throwable ignored) {}
                 Slog.i(TAG, "NeuralVoiceBridge linked to " + cls.getName() + " (processDirect=" + (sProcessDirectMethod != null) + ")");
             } catch (Throwable t) {
                 Slog.e(TAG, "Failed to reflect engine methods: " + t.getMessage());
@@ -102,7 +108,19 @@ public final class NeuralVoiceBridge {
     private static volatile float sCurrentGain = -1.0f;
     private static volatile float sCurrentPitch = 999.0f;
     private static volatile float sCurrentFormant = 999.0f;
+    private static volatile float sCurrentIndexRate = 999.0f;
+    private static volatile boolean sCurrentFineTune = false;
     private static volatile boolean sCurrentUnderflowSilence = false;
+
+    /** Child and deep names are DSP presets, not speakers inside a neural pack. */
+    private static String realPackVoice(String profile) {
+        if (profile == null || profile.isEmpty()) return null;
+        if ("child".equals(profile) || "child_01".equals(profile)) return null;
+        if ("deep".equals(profile) || "deep_01".equals(profile)) return null;
+        if ("robot".equals(profile)) return null;
+        if ("female".equals(profile) || "female_01".equals(profile)) return "female_01";
+        return profile;
+    }
 
     private static void checkDynamicProfileUpdate() {
         // Loading this bridge in the host (Local Voice Test/diagnostics) must not
@@ -124,12 +142,15 @@ public final class NeuralVoiceBridge {
         float newGain = config.micInputGain;
         float newPitch = config.micPitchSemitones;
         float newFormant = config.micFormantShift;
+        float newIndexRate = config.micIndexRate;
+        boolean newFineTune = config.micFineTune;
         boolean newUnderflowSilence = config.micUnderflowSilence;
 
         boolean profileChanged = newProfile != null && !newProfile.equals(sCurrentProfile);
         boolean modeChanged = newMode != null && !newMode.equals(sCurrentMode);
         boolean audioParamsChanged = newGain != sCurrentGain || newPitch != sCurrentPitch
-                || newFormant != sCurrentFormant || newUnderflowSilence != sCurrentUnderflowSilence;
+                || newFormant != sCurrentFormant || newIndexRate != sCurrentIndexRate
+                || newFineTune != sCurrentFineTune || newUnderflowSilence != sCurrentUnderflowSilence;
 
         if (profileChanged || modeChanged || audioParamsChanged) {
             String oldProfile = sCurrentProfile;
@@ -138,29 +159,33 @@ public final class NeuralVoiceBridge {
             sCurrentGain = newGain;
             sCurrentPitch = newPitch;
             sCurrentFormant = newFormant;
+            sCurrentIndexRate = newIndexRate;
+            sCurrentFineTune = newFineTune;
             sCurrentUnderflowSilence = newUnderflowSilence;
 
-            if (profileChanged && newProfile != null) {
-                String targetVoice = "female_01";
-                if ("female".equals(newProfile) || "female_01".equals(newProfile)) {
-                    targetVoice = "female_01";
-                } else if ("child".equals(newProfile) || "child_01".equals(newProfile)) {
-                    targetVoice = "child_01";
-                } else if ("deep".equals(newProfile) || "deep_01".equals(newProfile)) {
-                    targetVoice = "deep_01";
-                } else if (!newProfile.isEmpty()) {
-                    targetVoice = newProfile;
-                }
-
+            // DSP presets are pitch and formant. They are not neural speaker ids.
+            if ("neural".equals(newMode) && profileChanged && newProfile != null) {
+                String targetVoice = realPackVoice(newProfile);
                 Object engine = sEngineInstance;
                 Method selectMethod = sSelectVoiceMethod;
-                if (engine != null && selectMethod != null) {
+                if (targetVoice != null && engine != null && selectMethod != null) {
                     try {
                         selectMethod.invoke(engine, targetVoice);
                         Slog.i(TAG, "Dynamically switched voice profile from " + oldProfile
                                 + " to " + newProfile + " (" + targetVoice + ")");
                     } catch (Throwable t) {
                         Slog.w(TAG, "Dynamic voice switch failed: " + t.getMessage());
+                    }
+                }
+            }
+            if ("neural".equals(newMode)) {
+                Object engine = sEngineInstance;
+                Method tuneMethod = sSetFineTuneMethod;
+                if (engine != null && tuneMethod != null) {
+                    try {
+                        tuneMethod.invoke(engine, newPitch, newFormant, newIndexRate, newFineTune);
+                    } catch (Throwable t) {
+                        Slog.w(TAG, "Fine tune update failed: " + t.getMessage());
                     }
                 }
             }

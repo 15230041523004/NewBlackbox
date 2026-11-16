@@ -173,12 +173,10 @@ float ReadPitchDelay(int channel, double delay) {
 
 void ApplyDsp(AudioFrame &frame) {
     const int profile = g_profile.load(std::memory_order_relaxed);
+    // Sliders own pitch and formant. Profile no longer replaces them.
     float pitch = g_pitch.load(std::memory_order_relaxed);
     float formant = g_formant.load(std::memory_order_relaxed);
     float gain = g_input_gain.load(std::memory_order_relaxed);
-    if (profile == 1) { pitch = 4.0f; formant = 0.15f; }  // child: gentler shift avoids OLA glitch
-    else if (profile == 2) { pitch = -6.0f; formant = -0.35f; }
-    else if (profile == 3) { pitch = 0.0f; formant = 0.0f; }
     const float ratio = std::pow(2.0f, pitch / 12.0f);
     const int count = frame.frames * frame.channels;
     std::array<float, kMaxSamples> source{};
@@ -203,7 +201,7 @@ void ApplyDsp(AudioFrame &frame) {
         float weight_b = 1.0f - weight_a;
         for (int channel = 0; channel < frame.channels; ++channel) {
             float x = source[i * frame.channels + channel];
-            if (profile != 3 && std::fabs(ratio - 1.0f) > 0.001f) {
+            if (std::fabs(ratio - 1.0f) > 0.001f) {
                 x = ReadPitchDelay(channel, delay_a) * weight_a
                         + ReadPitchDelay(channel, delay_b) * weight_b;
             }
@@ -226,10 +224,9 @@ void ApplyDsp(AudioFrame &frame) {
             if (robot_phase >= 2.0 * 3.14159265358979323846) {
                 robot_phase -= 2.0 * 3.14159265358979323846;
             }
-        } else {
-            g_pitch_phase += pitch_step;
-            if (g_pitch_phase >= 1.0) g_pitch_phase -= 1.0;
         }
+        g_pitch_phase += pitch_step;
+        if (g_pitch_phase >= 1.0) g_pitch_phase -= 1.0;
         g_pitch_write = (g_pitch_write + 1) % kPitchRingSamples;
     }
     g_robot_phase = robot_phase;
