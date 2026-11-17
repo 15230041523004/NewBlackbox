@@ -25,14 +25,17 @@ public final class GuestTaskAlias {
     }
 
     public static String component(String packageName, int vpid) {
-        if (packageName == null || vpid < 0) {
+        if (vpid < 0) {
             return null;
         }
         ensureLoaded();
-        if (vpid >= sSlots || !sPackages.contains(packageName)) {
+        if (sSlots <= 0 || vpid >= sSlots) {
             return null;
         }
-        return "com.blacktwin.alias." + packageName.replace('.', '_') + "_P" + vpid;
+        if (packageName != null && sPackages.contains(packageName)) {
+            return "com.blacktwin.alias." + packageName.replace('.', '_') + "_P" + vpid;
+        }
+        return "com.blacktwin.alias.generic_guest_P" + vpid;
     }
 
     private static void ensureLoaded() {
